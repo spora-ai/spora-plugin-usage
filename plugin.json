@@ -1,0 +1,8 @@
+{
+    "$schema": "https://docs.spora-ai.com/schemas/plugin.schema.json",
+    "slug": "usage",
+    "description": "Usage metering, credits and limits. Tracks AI tokens and tool calls, bills them against credits, and stops a run that reaches its limit.",
+    "class": "Spora\\Plugins\\Usage\\UsagePlugin",
+    "icon": "chart",
+    "accent": "sky"
+}

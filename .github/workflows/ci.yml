@@ -1,0 +1,156 @@
+name: CI
+
+# External actions are pinned to full commit SHAs to prevent supply-chain
+# attacks via tag reassignment. Run `gh api repos/OWNER/REPO/git/refs/tags/vN`
+# to look up the current SHA when upgrading.
+# Review SonarCloud hotspots (rule githubactions:S7637) periodically.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Pest (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, mbstring
+          coverage: none
+          tools: composer
+
+      - name: Composer update spora-core
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+
+      - name: Run Pest
+        run: ./vendor/bin/pest
+
+  static-analysis:
+    name: PHPStan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer
+
+      - name: Composer update spora-core
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+
+      - name: Run PHPStan
+        # Match composer.json's "analyse" script so the 512M memory limit is used;
+        # the runner's 128M default crashes PHPStan on parallel workers.
+        run: ./vendor/bin/phpstan analyse --no-progress --memory-limit=512M
+
+  code-style:
+    name: php-cs-fixer (dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer
+
+      - name: Composer update spora-core
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+
+      - name: Check code style
+        # Same ruleset as Spora core's .php-cs-fixer.php so plugin style matches host.
+        run: ./vendor/bin/php-cs-fixer fix --dry-run --diff --no-interaction
+
+  coverage:
+    name: Test coverage
+    needs: [test, static-analysis]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Setup PHP with Xdebug
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        with:
+          php-version: '8.4'
+          extensions: curl, mbstring
+          coverage: xdebug
+          tools: composer
+
+      - name: Composer update spora-core
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+
+      - name: Generate clover coverage report
+        run: ./vendor/bin/pest --coverage-clover=coverage.xml --coverage-filter=src
+
+      - name: Upload coverage.xml
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: coverage-report
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  sonar:
+    name: SonarCloud scan
+    needs: coverage
+    # `always()` so the scanner still runs on tag pushes of unbuildable
+    # commits (e.g. the v0.1.0 placeholder), giving SonarCloud a
+    # "previous version" baseline for the next push to main.
+    # Skip fork PRs — secrets aren't available there and the job would
+    # fail noisily.
+    if: |
+      always() && (
+        github.event_name == 'push' ||
+        (github.event_name == 'pull_request' &&
+         github.event.pull_request.head.repo.full_name == github.repository)
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Download coverage.xml
+        # The artifact is missing when test/coverage jobs fail (e.g. v0.1.0
+        # placeholder). The scanner still runs but without coverage data.
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-report
+          path: .
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
