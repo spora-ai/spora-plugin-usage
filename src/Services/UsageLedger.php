@@ -126,7 +126,12 @@ final class UsageLedger
      *
      * The upsert writes the counters as zero because the increment below
      * adds the event's own counts; on the row that already existed, the
-     * upsert leaves the counters alone and only moves `updated_at`.
+     * upsert leaves the counters alone and moves `updated_at` alone as
+     * well.
+     *
+     * The statement writes the timestamps itself: a write through the
+     * query builder stamps nothing, and a bucket row whose `created_at` is
+     * empty says nothing about when the slot was first metered.
      */
     private function addToBucket(
         OwnerScope $scope,
@@ -160,7 +165,7 @@ final class UsageLedger
             ->where('owner_id', $scope->id)
             ->where('bucket_start', $bucketStart)
             ->incrementEach([
-                'credits'       => CreditAmount::round($credits),
+                'credits'       => CreditAmount::format($credits),
                 'total_tokens'  => $isLlm ? $usage->totalTokens() : 0,
                 'output_tokens' => $isLlm ? $usage->outputTokens() : 0,
                 'llm_calls'     => $isLlm ? 1 : 0,
