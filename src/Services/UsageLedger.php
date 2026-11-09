@@ -114,9 +114,19 @@ final class UsageLedger
      * The gap locks InnoDB takes on the missing row deadlock the pair as
      * well.
      *
-     * An insert that cannot conflict, followed by `col = col + x`, cannot
-     * lose: the second writer's insert is ignored and its increment lands on
-     * the row the first one made.
+     * The row is created by an **upsert** rather than an insert that
+     * ignores the duplicate, and the difference is a lock. A duplicate-key
+     * insert leaves a *shared* lock on the index record it found, and the
+     * increment that follows needs the *exclusive* lock on the same record:
+     * two writers of one slot each hold what the other waits for, and
+     * InnoDB rolls one of them back — taking the ledger row and the debit
+     * down with it, the failure this method exists to prevent. An upsert
+     * takes the exclusive lock at once, so the second writer waits for the
+     * first to commit and then adds to the row it made.
+     *
+     * The upsert writes the counters as zero because the increment below
+     * adds the event's own counts; on the row that already existed, the
+     * upsert leaves the counters alone and only moves `updated_at`.
      */
     private function addToBucket(
         OwnerScope $scope,
@@ -126,17 +136,24 @@ final class UsageLedger
     ): void {
         $bucketStart = $this->windowCalculator->bucketStart($occurredAt)->format('Y-m-d H:i:s');
         $isLlm = $usage instanceof LlmUsage;
+        $now = date('Y-m-d H:i:s');
 
-        UsageBucket::query()->insertOrIgnore([
-            'owner_type'    => $scope->type,
-            'owner_id'      => $scope->id,
-            'bucket_start'  => $bucketStart,
-            'credits'       => 0,
-            'total_tokens'  => 0,
-            'output_tokens' => 0,
-            'llm_calls'     => 0,
-            'tool_calls'    => 0,
-        ]);
+        UsageBucket::query()->upsert(
+            [[
+                'owner_type'    => $scope->type,
+                'owner_id'      => $scope->id,
+                'bucket_start'  => $bucketStart,
+                'credits'       => 0,
+                'total_tokens'  => 0,
+                'output_tokens' => 0,
+                'llm_calls'     => 0,
+                'tool_calls'    => 0,
+                'created_at'    => $now,
+                'updated_at'    => $now,
+            ]],
+            ['owner_type', 'owner_id', 'bucket_start'],
+            ['updated_at' => $now],
+        );
 
         UsageBucket::query()
             ->where('owner_type', $scope->type)
