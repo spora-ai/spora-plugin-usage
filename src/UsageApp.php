@@ -31,13 +31,16 @@ final class UsageApp implements VueAppInterface
 
     public function icon(): string
     {
-        // `chart` is a bundled icon name — see the plugin schema docs for the palette.
-        return 'chart';
+        // A name outside the host's bundled palette renders as the generic
+        // `puzzle`, so the name has to be one of the bundled glyphs. The
+        // bolt is the closest of them to what this app does: a meter
+        // measures consumption.
+        return 'zap';
     }
 
     public function accent(): string
     {
-        return 'sky';
+        return 'amber';
     }
 
     public function entry(): string
