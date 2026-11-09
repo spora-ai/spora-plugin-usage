@@ -100,45 +100,54 @@ final class UsageLedger
         ]);
     }
 
+    /**
+     * Add one event to the owner's bucket for the slot it falls into.
+     *
+     * The row is **created without reading it first**, and the counters are
+     * then incremented in one statement.
+     *
+     * A read-then-insert loses a race. `lockForUpdate()` locks only the rows
+     * that exist, so two tasks writing the first event of a slot both read
+     * nothing and both insert — and the loser of that race takes the whole
+     * transaction down with it, ledger row and debit included. The meter
+     * catches the failure and only logs it, so the usage silently vanishes.
+     * The gap locks InnoDB takes on the missing row deadlock the pair as
+     * well.
+     *
+     * An insert that cannot conflict, followed by `col = col + x`, cannot
+     * lose: the second writer's insert is ignored and its increment lands on
+     * the row the first one made.
+     */
     private function addToBucket(
         OwnerScope $scope,
         LlmUsage|ToolUsage $usage,
         float $credits,
         DateTimeImmutable $occurredAt,
     ): void {
-        $bucketStart = $this->windowCalculator->bucketStart($occurredAt);
+        $bucketStart = $this->windowCalculator->bucketStart($occurredAt)->format('Y-m-d H:i:s');
         $isLlm = $usage instanceof LlmUsage;
 
-        $existing = UsageBucket::query()
+        UsageBucket::query()->insertOrIgnore([
+            'owner_type'    => $scope->type,
+            'owner_id'      => $scope->id,
+            'bucket_start'  => $bucketStart,
+            'credits'       => 0,
+            'total_tokens'  => 0,
+            'output_tokens' => 0,
+            'llm_calls'     => 0,
+            'tool_calls'    => 0,
+        ]);
+
+        UsageBucket::query()
             ->where('owner_type', $scope->type)
             ->where('owner_id', $scope->id)
-            ->where('bucket_start', $bucketStart->format('Y-m-d H:i:s'))
-            ->lockForUpdate()
-            ->first();
-
-        if ($existing === null) {
-            UsageBucket::create([
-                'owner_type'    => $scope->type,
-                'owner_id'      => $scope->id,
-                'bucket_start'  => $bucketStart,
+            ->where('bucket_start', $bucketStart)
+            ->incrementEach([
                 'credits'       => CreditAmount::round($credits),
                 'total_tokens'  => $isLlm ? $usage->totalTokens() : 0,
                 'output_tokens' => $isLlm ? $usage->outputTokens() : 0,
                 'llm_calls'     => $isLlm ? 1 : 0,
                 'tool_calls'    => $isLlm ? 0 : 1,
-            ]);
-
-            return;
-        }
-
-        UsageBucket::query()
-            ->whereKey($existing->getKey())
-            ->update([
-                'credits'       => CreditAmount::format((float) $existing->credits + $credits),
-                'total_tokens'  => $existing->total_tokens + ($isLlm ? $usage->totalTokens() : 0),
-                'output_tokens' => $existing->output_tokens + ($isLlm ? $usage->outputTokens() : 0),
-                'llm_calls'     => $existing->llm_calls + ($isLlm ? 1 : 0),
-                'tool_calls'    => $existing->tool_calls + ($isLlm ? 0 : 1),
             ]);
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Spora\Plugins\Usage;
 
+use Psr\Log\LoggerInterface;
 use Spora\Apps\AppInterface;
 use Spora\Events\ContainerBuildingEvent;
 use Spora\Events\RoutesRegisteringEvent;
@@ -14,6 +15,7 @@ use Spora\Metering\UsageMeterInterface;
 use Spora\Plugins\AbstractPlugin;
 use Spora\Plugins\Usage\Http\UsageAdminController;
 use Spora\Plugins\Usage\Http\UsageController;
+use Spora\Plugins\Usage\Services\UsageLimitService;
 use Spora\Plugins\Usage\Settings\UsageSettingsProvider;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 
@@ -75,11 +77,22 @@ final class UsagePlugin extends AbstractPlugin implements EventSubscriberInterfa
     /**
      * Install the plugin's meter over core's null object, and wire the
      * controllers the routes dispatch into.
+     *
+     * The logger is bound **explicitly** on the two classes that take one.
+     * PHP-DI does not resolve an optional nullable constructor parameter:
+     * `?LoggerInterface $logger = null` stays `null` whether or not the
+     * container has a binding for the type. Left to autowiring, the meter
+     * would swallow its own failures in silence — and a meter that fails
+     * silently is the one failure mode the fail-open rule exists to make
+     * visible.
      */
     public function onContainerBuilding(ContainerBuildingEvent $event): void
     {
         $event->builder()->addDefinitions([
-            UsageMeterInterface::class => \DI\autowire(UsageMeter::class),
+            UsageMeterInterface::class => \DI\autowire(UsageMeter::class)
+                ->constructorParameter('logger', \DI\get(LoggerInterface::class)),
+            UsageLimitService::class => \DI\autowire(UsageLimitService::class)
+                ->constructorParameter('logger', \DI\get(LoggerInterface::class)),
             UsageController::class => \DI\autowire(),
             UsageAdminController::class => \DI\autowire(),
         ]);

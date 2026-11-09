@@ -313,3 +313,96 @@ it('adds the second event of a slot to the bucket of the first', function (): vo
         ->and((int) $buckets[0]->total_tokens)->toBe(220)
         ->and((int) $buckets[0]->output_tokens)->toBe(20);
 });
+
+it('writes the bucket without reading it first', function (): void {
+    // A read-then-insert loses a race. `lockForUpdate()` locks only the
+    // rows that exist, so two tasks writing the first event of a slot both
+    // read nothing and both insert — and the loser of that race takes the
+    // whole transaction down with it, ledger row and debit included. The
+    // meter catches the failure and only logs it, so the usage silently
+    // vanishes.
+    //
+    // The invariant is that the bucket row is never *read* on the way to
+    // being written. A true concurrency test needs two connections, and the
+    // suite runs on one in-memory SQLite; the query log is what pins the
+    // shape.
+    $queries = [];
+
+    $connection = Capsule::connection();
+    $events = $connection->getEventDispatcher();
+    if ($events === null) {
+        $events = new Illuminate\Events\Dispatcher();
+        $connection->setEventDispatcher($events);
+    }
+    $events->listen(
+        Illuminate\Database\Events\QueryExecuted::class,
+        static function ($event) use (&$queries): void {
+            $queries[] = strtolower($event->sql);
+        },
+    );
+
+    $userId = bootAuth(bootAuthLayer());
+    $principalId = createUserPrincipal($userId);
+
+    (new UsageLedger())->record(
+        new MeteringContext(
+            taskId: 1,
+            agentId: 1,
+            principalId: $principalId,
+            triggerUserId: $userId,
+            isSystemRun: false,
+        ),
+        new LlmSubject('openai_compatible', 'gpt-4o'),
+        new LlmUsage(
+            usage: new Usage(inputTokens: 1000, outputTokens: 200),
+            provider: 'openai_compatible',
+            model: 'gpt-4o',
+        ),
+        1.5,
+        true,
+        [OwnerScope::principal($principalId)],
+    );
+
+    $bucketReads = array_values(array_filter(
+        $queries,
+        static fn(string $sql): bool => str_contains($sql, 'usage_buckets') && str_starts_with($sql, 'select'),
+    ));
+
+    // The queries were captured at all — otherwise the assertion above
+    // would pass vacuously.
+    expect($queries)->not->toBeEmpty()
+        ->and($bucketReads)->toBe([]);
+});
+
+it('adds to an existing bucket rather than replacing it', function (): void {
+    $userId = bootAuth(bootAuthLayer());
+    $principalId = createUserPrincipal($userId);
+
+    $ledger = new UsageLedger();
+    $context = new MeteringContext(
+        taskId: 1,
+        agentId: 1,
+        principalId: $principalId,
+        triggerUserId: $userId,
+        isSystemRun: false,
+    );
+    $subject = new LlmSubject('openai_compatible', 'gpt-4o');
+    $usage = new LlmUsage(
+        usage: new Usage(inputTokens: 1000, outputTokens: 200),
+        provider: 'openai_compatible',
+        model: 'gpt-4o',
+    );
+    $scopes = [OwnerScope::principal($principalId)];
+
+    $ledger->record($context, $subject, $usage, 1.5, true, $scopes);
+    $ledger->record($context, $subject, $usage, 2.5, true, $scopes);
+
+    $bucket = Capsule::table('usage_buckets')->first();
+
+    expect(bucketRows())->toHaveCount(1)
+        ->and((float) $bucket->credits)->toBe(4.0)
+        // `totalTokens()` is input + output + the two cache counters, so
+        // 1200 a call and 2400 for the two.
+        ->and((int) $bucket->total_tokens)->toBe(2400)
+        ->and((int) $bucket->llm_calls)->toBe(2);
+});

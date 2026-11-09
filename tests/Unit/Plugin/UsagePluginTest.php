@@ -290,3 +290,89 @@ function usageRoutePath(string $branch, array $vars): string
         $branch,
     );
 }
+
+it('gives the meter the logger, so a meter failure is not swallowed in silence', function (): void {
+    // PHP-DI does not resolve an optional nullable constructor parameter:
+    // `?LoggerInterface $logger = null` stays null whether or not the
+    // container has a binding for the type. Left to autowiring, the meter
+    // would swallow its own failures in silence — and a meter that fails
+    // silently is the one failure mode the fail-open rule exists to make
+    // visible.
+    $recorder = new class implements LoggerInterface {
+        /** @var list<string> */
+        public array $messages = [];
+
+        public function emergency(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function alert(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function critical(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function error(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function warning(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function notice(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function info(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function debug(string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+
+        public function log(mixed $level, string|Stringable $message, array $context = []): void
+        {
+            $this->messages[] = (string) $message;
+        }
+    };
+
+    $builder = usageTestBuilder();
+    $builder->addDefinitions([
+        LoggerInterface::class => static fn(): LoggerInterface => $recorder,
+    ]);
+
+    $dispatcher = new EventDispatcher();
+    $dispatcher->addSubscriber(new UsagePlugin());
+    $dispatcher->dispatch(new ContainerBuildingEvent($builder));
+
+    $meter = $builder->build()->get(UsageMeterInterface::class);
+
+    // The limits table is gone, so the limit service's query fails and it
+    // logs the failure. With no logger the failure would vanish.
+    Capsule::schema()->drop('usage_limits');
+
+    $meter->evaluate(
+        new Spora\Metering\MeteringContext(
+            taskId: 1,
+            agentId: 1,
+            principalId: 1,
+            triggerUserId: null,
+            isSystemRun: false,
+        ),
+        new Spora\Metering\LlmSubject('openai_compatible', 'gpt-4o'),
+    );
+
+    expect($recorder->messages)->not->toBeEmpty();
+});
