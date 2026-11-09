@@ -157,36 +157,52 @@ final class UsageLedger
         }
 
         for ($attempt = 0; $attempt < self::DEBIT_ATTEMPTS; $attempt++) {
-            $row = UsageCredit::query()
-                ->where('owner_type', $scope->type)
-                ->where('owner_id', $scope->id)
-                ->lockForUpdate()
-                ->first();
+            $target = $this->debitTarget($scope, $credits);
 
-            if ($row === null) {
-                return;
-            }
-
-            $observed = $row->getRawOriginal('balance');
-            $next = CreditAmount::round((float) $observed - $credits);
-
-            // A debit that rounds away to nothing is not worth a write: the
-            // balance would not change, and a write that changes nothing is
-            // indistinguishable from a lost race.
-            if ($next === (float) $observed) {
+            if ($target === null) {
                 return;
             }
 
             $applied = UsageCredit::query()
                 ->where('owner_type', $scope->type)
                 ->where('owner_id', $scope->id)
-                ->where('balance', $observed)
-                ->update(['balance' => CreditAmount::format($next)]);
+                ->where('balance', $target['observed'])
+                ->update(['balance' => CreditAmount::format($target['next'])]);
 
             if ($applied > 0) {
                 return;
             }
         }
+    }
+
+    /**
+     * The balance to write, or null when there is nothing to debit.
+     *
+     * @return array{observed: mixed, next: float}|null
+     */
+    private function debitTarget(OwnerScope $scope, float $credits): ?array
+    {
+        $row = UsageCredit::query()
+            ->where('owner_type', $scope->type)
+            ->where('owner_id', $scope->id)
+            ->lockForUpdate()
+            ->first();
+
+        if ($row === null) {
+            return null;
+        }
+
+        $observed = $row->getRawOriginal('balance');
+        $next = CreditAmount::round((float) $observed - $credits);
+
+        // A debit that rounds away to nothing is not worth a write: the
+        // balance would not change, and a write that changes nothing is
+        // indistinguishable from a lost race.
+        if ($next === (float) $observed) {
+            return null;
+        }
+
+        return ['observed' => $observed, 'next' => $next];
     }
 
     /**

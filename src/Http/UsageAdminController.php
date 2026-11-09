@@ -6,6 +6,7 @@ namespace Spora\Plugins\Usage\Http;
 
 use DateTimeImmutable;
 use Spora\Http\JsonControllerHelpers;
+use Spora\Plugins\Usage\Http\Exceptions\UsagePayloadException;
 use Spora\Plugins\Usage\Models\UsageLimit;
 use Spora\Plugins\Usage\Services\OwnerScope;
 use Spora\Plugins\Usage\Services\WindowCalculator;
@@ -22,11 +23,13 @@ use Symfony\Component\HttpFoundation\Request;
  * is a 422: a limit whose window is not a window, or a cap that is negative,
  * is a refusal rather than a broken request. {@see UsagePayloadParser} draws
  * that line; this class only decides what happens with the payload it
- * returns.
+ * reads.
  */
 final class UsageAdminController
 {
     use JsonControllerHelpers;
+
+    private const ERR_PRINCIPAL_NOT_FOUND = 'Principal not found.';
 
     public function __construct(
         private readonly UsageStore $store,
@@ -60,7 +63,7 @@ final class UsageAdminController
         $now = new DateTimeImmutable();
         $summary = $this->store->principalSummary($id, $now);
         if ($summary === null) {
-            return $this->notFound('NOT_FOUND', 'Principal not found.');
+            return $this->notFound('NOT_FOUND', self::ERR_PRINCIPAL_NOT_FOUND);
         }
 
         return new JsonResponse(['data' => [
@@ -97,15 +100,16 @@ final class UsageAdminController
     public function replaceLimits(int $id, Request $request): JsonResponse
     {
         if ($this->store->principal($id) === null) {
-            return $this->notFound('NOT_FOUND', 'Principal not found.');
+            return $this->notFound('NOT_FOUND', self::ERR_PRINCIPAL_NOT_FOUND);
         }
 
-        $parsed = $this->parser->parseLimits($request);
-        if ($parsed instanceof JsonResponse) {
-            return $parsed;
+        try {
+            $limits = $this->parser->parseLimits($request);
+        } catch (UsagePayloadException $e) {
+            return $this->error($e->errorCode, $e->getMessage(), $e->status);
         }
 
-        $this->store->replaceLimits(OwnerScope::TYPE_PRINCIPAL, $id, $parsed);
+        $this->store->replaceLimits(OwnerScope::TYPE_PRINCIPAL, $id, $limits);
 
         // The answer carries the stored rows with their figures, which the
         // summary already holds.
@@ -129,19 +133,20 @@ final class UsageAdminController
     public function grantCredits(int $id, Request $request): JsonResponse
     {
         if ($this->store->principal($id) === null) {
-            return $this->notFound('NOT_FOUND', 'Principal not found.');
+            return $this->notFound('NOT_FOUND', self::ERR_PRINCIPAL_NOT_FOUND);
         }
 
-        $parsed = $this->parser->parseGrant($request);
-        if ($parsed instanceof JsonResponse) {
-            return $parsed;
+        try {
+            $grant = $this->parser->parseGrant($request);
+        } catch (UsagePayloadException $e) {
+            return $this->error($e->errorCode, $e->getMessage(), $e->status);
         }
 
         $balance = $this->store->grant(
             OwnerScope::TYPE_PRINCIPAL,
             $id,
-            $parsed['amount'],
-            $parsed['note'],
+            $grant['amount'],
+            $grant['note'],
         );
 
         return new JsonResponse(['data' => ['balance' => $balance]]);
@@ -160,12 +165,13 @@ final class UsageAdminController
      */
     public function replacePrices(Request $request): JsonResponse
     {
-        $parsed = $this->parser->parsePrices($request);
-        if ($parsed instanceof JsonResponse) {
-            return $parsed;
+        try {
+            $prices = $this->parser->parsePrices($request);
+        } catch (UsagePayloadException $e) {
+            return $this->error($e->errorCode, $e->getMessage(), $e->status);
         }
 
-        $this->priceStore->replacePrices($parsed);
+        $this->priceStore->replacePrices($prices);
 
         return new JsonResponse(['data' => ['prices' => $this->priceStore->prices()]]);
     }

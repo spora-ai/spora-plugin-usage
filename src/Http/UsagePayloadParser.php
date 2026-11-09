@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace Spora\Plugins\Usage\Http;
 
+use JsonException;
 use Spora\Http\JsonControllerHelpers;
+use Spora\Plugins\Usage\Http\Exceptions\UsagePayloadException;
 use Spora\Plugins\Usage\Models\UsageLimit;
 use Spora\Plugins\Usage\Models\UsagePrice;
 use Spora\Plugins\Usage\Services\WindowCalculator;
-use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -16,8 +17,9 @@ use Symfony\Component\HttpFoundation\Response;
  * The admin payloads, read and checked.
  *
  * Every entry point answers either with the parsed payload or with the
- * `JsonResponse` that carries the refusal, so the caller has one thing to
- * check: a payload is either wholly read or wholly refused.
+ * {@see UsagePayloadException} that carries the refusal, so a payload is
+ * either wholly read or wholly refused — a half-read payload is not a
+ * payload, and the caller has one thing to catch.
  *
  * The parser knows the vocabulary of the domain and nothing else — which
  * windows, which units, which modes and which price kinds exist. A payload
@@ -27,6 +29,8 @@ use Symfony\Component\HttpFoundation\Response;
 final class UsagePayloadParser
 {
     use JsonControllerHelpers;
+
+    private const ERR_INVALID_JSON = 'Request body must be valid JSON.';
 
     private const LIMIT_UNITS = [
         UsageLimit::UNIT_CREDITS,
@@ -52,18 +56,13 @@ final class UsagePayloadParser
     private const PRICE_FIELDS = ['input_price', 'output_price', 'cached_price', 'call_price'];
 
     /**
-     * @return JsonResponse|list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
+     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
      */
-    public function parseLimits(Request $request): JsonResponse|array
+    public function parseLimits(Request $request): array
     {
-        $body = $this->safeDecodeJson($request);
-        if ($body instanceof JsonResponse) {
-            return $body;
-        }
-
-        $rows = $body['limits'] ?? null;
+        $rows = $this->body($request)['limits'] ?? null;
         if (!is_array($rows) || !array_is_list($rows)) {
-            return $this->error('BAD_REQUEST', 'limits must be an array.', Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', 'limits must be an array.', Response::HTTP_BAD_REQUEST);
         }
 
         $limits = [];
@@ -71,17 +70,14 @@ final class UsagePayloadParser
 
         foreach ($rows as $index => $row) {
             if (!is_array($row)) {
-                return $this->error('BAD_REQUEST', "limits[{$index}] must be an object.", Response::HTTP_BAD_REQUEST);
+                throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}] must be an object.", Response::HTTP_BAD_REQUEST);
             }
 
             $limit = $this->parseLimit($row, (int) $index);
-            if ($limit instanceof JsonResponse) {
-                return $limit;
-            }
 
             $key = $limit['window'] . '|' . $limit['window_size'] . '|' . $limit['unit'];
             if (isset($seen[$key])) {
-                return $this->error(
+                throw new UsagePayloadException(
                     'CONFLICT',
                     "limits[{$index}] duplicates an earlier limit.",
                     Response::HTTP_CONFLICT,
@@ -96,21 +92,18 @@ final class UsagePayloadParser
     }
 
     /**
-     * @return JsonResponse|array{amount: float, note: string|null}
+     * @return array{amount: float, note: string|null}
      */
-    public function parseGrant(Request $request): JsonResponse|array
+    public function parseGrant(Request $request): array
     {
-        $body = $this->safeDecodeJson($request);
-        if ($body instanceof JsonResponse) {
-            return $body;
-        }
+        $body = $this->body($request);
 
         $amount = $body['amount'] ?? null;
         if (!is_int($amount) && !is_float($amount)) {
-            return $this->error('BAD_REQUEST', 'amount must be a number.', Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', 'amount must be a number.', Response::HTTP_BAD_REQUEST);
         }
         if ((float) $amount === 0.0) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_AMOUNT',
                 'amount must not be zero.',
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -119,7 +112,7 @@ final class UsagePayloadParser
 
         $note = $body['note'] ?? null;
         if ($note !== null && !is_string($note)) {
-            return $this->error('BAD_REQUEST', 'note must be a string.', Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', 'note must be a string.', Response::HTTP_BAD_REQUEST);
         }
 
         return [
@@ -129,18 +122,13 @@ final class UsagePayloadParser
     }
 
     /**
-     * @return JsonResponse|list<array<string, mixed>>
+     * @return list<array<string, mixed>>
      */
-    public function parsePrices(Request $request): JsonResponse|array
+    public function parsePrices(Request $request): array
     {
-        $body = $this->safeDecodeJson($request);
-        if ($body instanceof JsonResponse) {
-            return $body;
-        }
-
-        $rows = $body['prices'] ?? null;
+        $rows = $this->body($request)['prices'] ?? null;
         if (!is_array($rows) || !array_is_list($rows)) {
-            return $this->error('BAD_REQUEST', 'prices must be an array.', Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', 'prices must be an array.', Response::HTTP_BAD_REQUEST);
         }
 
         $prices = [];
@@ -148,17 +136,14 @@ final class UsagePayloadParser
 
         foreach ($rows as $index => $row) {
             if (!is_array($row)) {
-                return $this->error('BAD_REQUEST', "prices[{$index}] must be an object.", Response::HTTP_BAD_REQUEST);
+                throw new UsagePayloadException('BAD_REQUEST', "prices[{$index}] must be an object.", Response::HTTP_BAD_REQUEST);
             }
 
             $price = $this->parsePrice($row, (int) $index);
-            if ($price instanceof JsonResponse) {
-                return $price;
-            }
 
             $key = $price['kind'] . '|' . $price['provider'] . '|' . $price['key'] . '|' . $price['operation'];
             if (isset($seen[$key])) {
-                return $this->error(
+                throw new UsagePayloadException(
                     'CONFLICT',
                     "prices[{$index}] duplicates an earlier price.",
                     Response::HTTP_CONFLICT,
@@ -174,39 +159,16 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}
+     * @return array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}
      */
-    private function parseLimit(array $row, int $index): JsonResponse|array
+    private function parseLimit(array $row, int $index): array
     {
         $window = $this->parseLimitWindow($row, $index);
-        if ($window instanceof JsonResponse) {
-            return $window;
-        }
-
         $unit = $this->parseLimitUnit($row, $index);
-        if ($unit instanceof JsonResponse) {
-            return $unit;
-        }
-
         $mode = $this->parseLimitMode($row, $index);
-        if ($mode instanceof JsonResponse) {
-            return $mode;
-        }
-
         $size = $this->parseWindowSize($row, $index, $window);
-        if ($size instanceof JsonResponse) {
-            return $size;
-        }
-
         $cap = $this->parseLimitCap($row, $index, $unit);
-        if ($cap instanceof JsonResponse) {
-            return $cap;
-        }
-
         $enabled = $this->parseLimitEnabled($row, $index);
-        if ($enabled instanceof JsonResponse) {
-            return $enabled;
-        }
 
         return [
             'window' => $window,
@@ -220,16 +182,15 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|string
      */
-    private function parseLimitWindow(array $row, int $index): JsonResponse|string
+    private function parseLimitWindow(array $row, int $index): string
     {
         $window = $row['window'] ?? null;
         if (!is_string($window)) {
-            return $this->error('BAD_REQUEST', "limits[{$index}].window must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].window must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($window, self::LIMIT_WINDOWS, true)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_WINDOW',
                 "limits[{$index}].window must be one of: hour, day, week, month, rolling, total.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -241,16 +202,15 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|string
      */
-    private function parseLimitUnit(array $row, int $index): JsonResponse|string
+    private function parseLimitUnit(array $row, int $index): string
     {
         $unit = $row['unit'] ?? null;
         if (!is_string($unit)) {
-            return $this->error('BAD_REQUEST', "limits[{$index}].unit must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].unit must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($unit, self::LIMIT_UNITS, true)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_UNIT',
                 "limits[{$index}].unit must be one of: " . implode(', ', self::LIMIT_UNITS) . '.',
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -262,16 +222,15 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|string
      */
-    private function parseLimitMode(array $row, int $index): JsonResponse|string
+    private function parseLimitMode(array $row, int $index): string
     {
         $mode = $row['mode'] ?? 'hard';
         if (!is_string($mode)) {
-            return $this->error('BAD_REQUEST', "limits[{$index}].mode must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].mode must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($mode, self::LIMIT_MODES, true)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_MODE',
                 "limits[{$index}].mode must be one of: " . implode(', ', self::LIMIT_MODES) . '.',
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -289,24 +248,25 @@ final class UsagePayloadParser
      * domain does not have.
      *
      * @param array<string, mixed> $row
-     * @return JsonResponse|int
      */
-    private function parseWindowSize(array $row, int $index, string $window): JsonResponse|int
+    private function parseWindowSize(array $row, int $index, string $window): int
     {
         $size = $row['window_size'] ?? null;
 
         if ($size === null) {
-            return $window === WindowCalculator::WINDOW_ROLLING
-                ? $this->error(
+            if ($window === WindowCalculator::WINDOW_ROLLING) {
+                throw new UsagePayloadException(
                     'INVALID_WINDOW_SIZE',
                     "limits[{$index}].window_size is required for the rolling window.",
                     Response::HTTP_UNPROCESSABLE_ENTITY,
-                )
-                : 1;
+                );
+            }
+
+            return 1;
         }
 
         if (!is_int($size)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'BAD_REQUEST',
                 "limits[{$index}].window_size must be an integer.",
                 Response::HTTP_BAD_REQUEST,
@@ -314,7 +274,7 @@ final class UsagePayloadParser
         }
 
         if ($size < 1) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_WINDOW_SIZE',
                 "limits[{$index}].window_size must be at least 1.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -322,7 +282,7 @@ final class UsagePayloadParser
         }
 
         if ($window !== WindowCalculator::WINDOW_ROLLING && $size !== 1) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_WINDOW_SIZE',
                 "limits[{$index}].window_size must be 1 for the named windows.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -336,16 +296,15 @@ final class UsagePayloadParser
      * A credit cap is a decimal; a count cap is a whole number.
      *
      * @param array<string, mixed> $row
-     * @return JsonResponse|float|int
      */
-    private function parseLimitCap(array $row, int $index, string $unit): JsonResponse|float|int
+    private function parseLimitCap(array $row, int $index, string $unit): float|int
     {
         $cap = $row['cap'] ?? null;
         if (!is_int($cap) && !is_float($cap)) {
-            return $this->error('BAD_REQUEST', "limits[{$index}].cap must be a number.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].cap must be a number.", Response::HTTP_BAD_REQUEST);
         }
         if ((float) $cap < 0.0) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_CAP',
                 "limits[{$index}].cap must not be negative.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -357,7 +316,7 @@ final class UsagePayloadParser
         }
 
         if (floor((float) $cap) !== (float) $cap) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_CAP',
                 "limits[{$index}].cap must be a whole number for the {$unit} unit.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -369,13 +328,12 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|bool
      */
-    private function parseLimitEnabled(array $row, int $index): JsonResponse|bool
+    private function parseLimitEnabled(array $row, int $index): bool
     {
         $enabled = $row['enabled'] ?? true;
         if (!is_bool($enabled)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'BAD_REQUEST',
                 "limits[{$index}].enabled must be a boolean.",
                 Response::HTTP_BAD_REQUEST,
@@ -387,39 +345,18 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|array<string, mixed>
+     * @return array<string, mixed>
      */
-    private function parsePrice(array $row, int $index): JsonResponse|array
+    private function parsePrice(array $row, int $index): array
     {
         $kind = $this->parsePriceKind($row, $index);
-        if ($kind instanceof JsonResponse) {
-            return $kind;
-        }
-
         $key = $this->parsePriceKey($row, $index);
-        if ($key instanceof JsonResponse) {
-            return $key;
-        }
-
         $provider = $this->parsePriceText($row, $index, 'provider');
-        if ($provider instanceof JsonResponse) {
-            return $provider;
-        }
-
         $operation = $this->parsePriceText($row, $index, 'operation');
-        if ($operation instanceof JsonResponse) {
-            return $operation;
-        }
 
-        $refusal = $this->refuseForeignHalf($kind, $provider, $operation, $index);
-        if ($refusal instanceof JsonResponse) {
-            return $refusal;
-        }
+        $this->refuseForeignHalf($kind, $provider, $operation, $index);
 
         $amounts = $this->parsePriceAmounts($row, $index);
-        if ($amounts instanceof JsonResponse) {
-            return $amounts;
-        }
 
         return [
             'kind' => $kind,
@@ -431,16 +368,15 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|string
      */
-    private function parsePriceKind(array $row, int $index): JsonResponse|string
+    private function parsePriceKind(array $row, int $index): string
     {
         $kind = $row['kind'] ?? null;
         if (!is_string($kind)) {
-            return $this->error('BAD_REQUEST', "prices[{$index}].kind must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "prices[{$index}].kind must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($kind, self::PRICE_KINDS, true)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_KIND',
                 "prices[{$index}].kind must be one of: " . implode(', ', self::PRICE_KINDS) . '.',
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -452,16 +388,15 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|string
      */
-    private function parsePriceKey(array $row, int $index): JsonResponse|string
+    private function parsePriceKey(array $row, int $index): string
     {
         $key = $row['key'] ?? null;
         if (!is_string($key)) {
-            return $this->error('BAD_REQUEST', "prices[{$index}].key must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "prices[{$index}].key must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (trim($key) === '') {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_KEY',
                 "prices[{$index}].key must not be empty.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -473,13 +408,12 @@ final class UsagePayloadParser
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|string
      */
-    private function parsePriceText(array $row, int $index, string $field): JsonResponse|string
+    private function parsePriceText(array $row, int $index, string $field): string
     {
         $value = $row[$field] ?? '';
         if (!is_string($value)) {
-            return $this->error(
+            throw new UsagePayloadException(
                 'BAD_REQUEST',
                 "prices[{$index}].{$field} must be a string.",
                 Response::HTTP_BAD_REQUEST,
@@ -501,9 +435,9 @@ final class UsagePayloadParser
         string $provider,
         string $operation,
         int $index,
-    ): ?JsonResponse {
+    ): void {
         if ($kind === UsagePrice::KIND_TOOL && $provider !== '') {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_PROVIDER',
                 "prices[{$index}].provider must be empty for a tool price.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -511,35 +445,33 @@ final class UsagePayloadParser
         }
 
         if ($kind === UsagePrice::KIND_MODEL && $operation !== '') {
-            return $this->error(
+            throw new UsagePayloadException(
                 'INVALID_OPERATION',
                 "prices[{$index}].operation must be empty for a model price.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
-
-        return null;
     }
 
     /**
      * @param array<string, mixed> $row
-     * @return JsonResponse|array<string, float>
+     * @return array<string, float>
      */
-    private function parsePriceAmounts(array $row, int $index): JsonResponse|array
+    private function parsePriceAmounts(array $row, int $index): array
     {
         $amounts = [];
 
         foreach (self::PRICE_FIELDS as $field) {
             $value = $row[$field] ?? 0;
             if (!is_int($value) && !is_float($value)) {
-                return $this->error(
+                throw new UsagePayloadException(
                     'BAD_REQUEST',
                     "prices[{$index}].{$field} must be a number.",
                     Response::HTTP_BAD_REQUEST,
                 );
             }
             if ((float) $value < 0.0) {
-                return $this->error(
+                throw new UsagePayloadException(
                     'INVALID_PRICE',
                     "prices[{$index}].{$field} must not be negative.",
                     Response::HTTP_UNPROCESSABLE_ENTITY,
@@ -549,5 +481,23 @@ final class UsagePayloadParser
         }
 
         return $amounts;
+    }
+
+    /**
+     * The body of the request, read the way the API reads one.
+     *
+     * A body that is not JSON is refused here, before a field of it is
+     * read: the refusal is the same one the API gives for a body it cannot
+     * decode, whichever route asked for it.
+     *
+     * @return array<string, mixed>
+     */
+    private function body(Request $request): array
+    {
+        try {
+            return $this->decodeJson($request);
+        } catch (JsonException) {
+            throw new UsagePayloadException('INVALID_JSON', self::ERR_INVALID_JSON, Response::HTTP_BAD_REQUEST);
+        }
     }
 }

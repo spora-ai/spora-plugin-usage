@@ -362,6 +362,34 @@ it('refuses a limit whose window is not a window', function (): void {
     expect(usageBody($response)['error']['code'])->toBe('INVALID_WINDOW');
 });
 
+it('refuses a grant of nothing', function (): void {
+    // A grant of zero is a value the server reads and will not store, so it
+    // is a 422 rather than a broken request.
+    [$router, $auth, $csrf] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+    $principalId = createUserPrincipal($adminId);
+
+    $response = usagePut($router, $csrf, "/api/v1/usage/principals/{$principalId}/credits", ['amount' => 0]);
+
+    expect($response->getStatusCode())->toBe(422);
+    expect(usageBody($response)['error']['code'])->toBe('INVALID_AMOUNT');
+});
+
+it('refuses a price book that is not a list', function (): void {
+    // A price book that is not a list is a malformed body, so it is a 400.
+    [$router, $auth, $csrf] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+
+    $response = usagePut($router, $csrf, '/api/v1/usage/prices', ['prices' => 'none']);
+
+    expect($response->getStatusCode())->toBe(400);
+    expect(usageBody($response)['error']['code'])->toBe('BAD_REQUEST');
+});
+
 it('answers 404 for a principal that does not exist', function (): void {
     [$router, $auth] = usageApi();
 

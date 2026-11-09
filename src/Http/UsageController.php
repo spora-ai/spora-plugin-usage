@@ -46,7 +46,7 @@ final class UsageController
      * The balances, the limits and the spend of every principal the caller
      * can act for.
      */
-    public function me(Request $request): JsonResponse
+    public function me(): JsonResponse
     {
         $userId = $this->auth->currentUserId();
         if ($userId === null) {

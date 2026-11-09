@@ -100,11 +100,9 @@ final class UsageLimitService
         $cap = $this->asFloat($limit->cap ?? null);
         $spend = $this->spendFor($owner, $window, $windowSize, $counter, $context);
 
-        if ($spend === null) {
-            return null;
-        }
-
-        if (round($spend, 8) < round($cap, 8)) {
+        // A spend that could not be read and a spend under the cap are the
+        // same answer: this limit is not breached.
+        if ($spend === null || round($spend, 8) < round($cap, 8)) {
             return null;
         }
 
