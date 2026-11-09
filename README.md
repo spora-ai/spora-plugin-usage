@@ -50,7 +50,7 @@ Nine endpoints appear under `/api/v1/usage` after install. The two `me` routes a
 - `PUT /api/v1/usage/prices` — replaces the **whole** price book.
 - `GET /api/v1/usage/unpriced` — the models and tools that have been used without a price row.
 
-A malformed value is a **400** and a value the server reads but will not store — a window outside the vocabulary, a negative cap, a duplicate row — is a **422**. A missing principal is a **404**, and two rows that would collide are a **409**.
+A malformed value is a **400** and a value the server reads but will not store — a window outside the vocabulary, a negative cap — is a **422**. A missing principal is a **404**, and two rows in one payload that would collide are a **409**.
 
 ## Settings
 
