@@ -47,6 +47,9 @@ final class UsageLedger
 
     /**
      * @param  OwnerScope[]  $scopes  The scopes the event is charged to.
+     * @param  bool  $billed  Whether the credits were charged to the scopes.
+     *                        A principal who ran this with their own
+     *                        configuration is recorded but not charged.
      */
     public function record(
         MeteringContext $context,
@@ -54,12 +57,13 @@ final class UsageLedger
         LlmUsage|ToolUsage $usage,
         float $credits,
         bool $priced,
+        bool $billed,
         array $scopes,
     ): void {
-        Capsule::connection()->transaction(function () use ($context, $subject, $usage, $credits, $priced, $scopes): void {
+        Capsule::connection()->transaction(function () use ($context, $subject, $usage, $credits, $priced, $billed, $scopes): void {
             $occurredAt = new DateTimeImmutable();
 
-            $this->writeLedgerRow($context, $subject, $usage, $credits, $priced, $occurredAt);
+            $this->writeLedgerRow($context, $subject, $usage, $credits, $priced, $billed, $occurredAt);
 
             foreach ($scopes as $scope) {
                 $this->addToBucket($scope, $usage, $credits, $occurredAt);
@@ -74,6 +78,7 @@ final class UsageLedger
         LlmUsage|ToolUsage $usage,
         float $credits,
         bool $priced,
+        bool $billed,
         DateTimeImmutable $occurredAt,
     ): void {
         $isLlm = $usage instanceof LlmUsage;
@@ -93,6 +98,7 @@ final class UsageLedger
             'cached_tokens' => $isLlm ? $usage->cachedTokens() : 0,
             'credits'       => CreditAmount::round($credits),
             'priced'        => $priced,
+            'billed'        => $billed,
             'task_id'       => $context->taskId,
             'agent_id'      => $context->agentId,
             'occurred_at'   => $occurredAt,

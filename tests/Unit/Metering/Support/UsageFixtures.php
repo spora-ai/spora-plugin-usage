@@ -34,14 +34,70 @@ final class UsageFixtures
         int $principalId,
         ?int $triggerUserId = null,
         bool $isSystemRun = false,
+        int $agentId = 1,
     ): MeteringContext {
         return new MeteringContext(
             taskId: 1,
-            agentId: 1,
+            agentId: $agentId,
             principalId: $principalId,
             triggerUserId: $triggerUserId,
             isSystemRun: $isSystemRun,
         );
+    }
+
+    /**
+     * A model configuration, and the id of its row.
+     *
+     * A global one is the installation's; a principal-owned one is that
+     * principal's own key. The settings are written unencrypted because
+     * the meter reads the row's ownership, not its contents.
+     */
+    public static function seedLlmConfiguration(
+        string $name,
+        bool $isGlobal,
+        ?int $principalId = null,
+    ): int {
+        return (int) Capsule::table('llm_driver_configurations')->insertGetId([
+            'principal_id' => $principalId,
+            'name'         => $name,
+            'driver_class' => 'Spora\\Drivers\\OpenAICompatibleDriver',
+            'settings'     => json_encode(['model' => 'gpt-4o', 'api_key' => 'a-test-key']),
+            'is_default'   => true,
+            'is_global'    => $isGlobal,
+            'created_at'   => date('Y-m-d H:i:s'),
+            'updated_at'   => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    /**
+     * The principal's own choice of model configuration.
+     *
+     * It is the second tier of the resolution: an agent pinned to nothing
+     * uses the principal's preference before the global default.
+     */
+    public static function preferLlmConfiguration(int $principalId, int $configId): void
+    {
+        Capsule::table('principal_preferences')->insert([
+            'principal_id'            => $principalId,
+            'preferred_llm_config_id' => $configId,
+            'created_at'              => date('Y-m-d H:i:s'),
+            'updated_at'              => date('Y-m-d H:i:s'),
+        ]);
+    }
+
+    /**
+     * A tool configuration of the principal's own.
+     */
+    public static function seedToolConfiguration(int $principalId, string $toolClass): void
+    {
+        Capsule::table('tool_user_settings')->insert([
+            'principal_id' => $principalId,
+            'tool_class'   => $toolClass,
+            'settings'     => json_encode(['api_key' => 'a-test-key']),
+            'is_default'   => true,
+            'created_at'   => date('Y-m-d H:i:s'),
+            'updated_at'   => date('Y-m-d H:i:s'),
+        ]);
     }
 
     /**

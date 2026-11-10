@@ -13,6 +13,7 @@ use Spora\Metering\ToolSubject;
 use Spora\Metering\ToolUsage;
 use Spora\Metering\UsageDecision;
 use Spora\Metering\UsageMeterInterface;
+use Spora\Plugins\Usage\Services\ConfigurationScope;
 use Spora\Plugins\Usage\Services\CreditService;
 use Spora\Plugins\Usage\Services\OwnerScope;
 use Spora\Plugins\Usage\Services\PriceBook;
@@ -27,6 +28,11 @@ use Throwable;
  * The core already refuses to let a meter break a run, but a meter that
  * threw on every call would fill the log with failures nobody can act on.
  * This one therefore swallows its own failures and lets the call proceed.
+ *
+ * What is charged is the plugin's own decision: an event served by the
+ * principal's own configuration is recorded but not billed, because the
+ * installation does not pay for it. {@see ConfigurationScope} says which
+ * is which.
  */
 final class UsageMeter implements UsageMeterInterface
 {
@@ -36,6 +42,7 @@ final class UsageMeter implements UsageMeterInterface
         private readonly CreditService $credits,
         private readonly PriceBook $priceBook,
         private readonly UsageLedger $ledger,
+        private readonly ConfigurationScope $scope,
         private readonly ?LoggerInterface $logger = null,
     ) {}
 
@@ -70,14 +77,30 @@ final class UsageMeter implements UsageMeterInterface
     public function recordLlmUsage(MeteringContext $context, LlmUsage $usage): void
     {
         try {
+            $subject = new LlmSubject($usage->provider, $usage->model);
             $price = $this->priceBook->priceForLlm($usage->provider, $usage->model);
+
+            // A price the installation does not pay: the principal ran
+            // this with their own provider key. The event is still
+            // recorded — the tokens are a fact — but it is not charged.
+            $billed = false;
+            $credits = 0.0;
+
+            if ($price !== null) {
+                $billed = $this->scope->isInstallationScoped($context, $subject);
+
+                if ($billed) {
+                    $credits = $price->creditsFor($usage);
+                }
+            }
 
             $this->ledger->record(
                 $context,
-                new LlmSubject($usage->provider, $usage->model),
+                $subject,
                 $usage,
-                $price === null ? 0.0 : $price->creditsFor($usage),
+                $credits,
                 $price !== null,
+                $billed,
                 $this->attribution->scopesFor($context),
             );
         } catch (Throwable $e) {
@@ -88,14 +111,27 @@ final class UsageMeter implements UsageMeterInterface
     public function recordToolUsage(MeteringContext $context, ToolUsage $usage): void
     {
         try {
+            $subject = new ToolSubject($usage->toolName, $usage->toolClass, $usage->operation);
             $price = $this->priceBook->priceForTool($usage->toolClass, $usage->operation);
+
+            $billed = false;
+            $credits = 0.0;
+
+            if ($price !== null) {
+                $billed = $this->scope->isInstallationScoped($context, $subject);
+
+                if ($billed) {
+                    $credits = $price->creditsFor($usage);
+                }
+            }
 
             $this->ledger->record(
                 $context,
-                new ToolSubject($usage->toolName, $usage->toolClass, $usage->operation),
+                $subject,
                 $usage,
-                $price === null ? 0.0 : $price->creditsFor($usage),
+                $credits,
                 $price !== null,
+                $billed,
                 $this->attribution->scopesFor($context),
             );
         } catch (Throwable $e) {

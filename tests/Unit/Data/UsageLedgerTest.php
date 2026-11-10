@@ -81,6 +81,7 @@ it('writes one ledger row and one bucket row per scope', function (): void {
         ),
         1.5,
         true,
+        true,
         [OwnerScope::principal($principalId), OwnerScope::user($userId)],
     );
 
@@ -134,6 +135,7 @@ it('counts a tool call as a tool call and not as a model call', function (): voi
         ),
         2.0,
         true,
+        true,
         [OwnerScope::principal($principalId)],
     );
 
@@ -172,6 +174,7 @@ it('snapshots the type of the principal the event is charged to', function (): v
         ),
         0.0,
         false,
+        false,
         [OwnerScope::principal($principalId)],
     );
 
@@ -201,6 +204,7 @@ it('snapshots a user principal as a user', function (): void {
         ),
         0.0,
         false,
+        false,
         [OwnerScope::principal($principalId)],
     );
 
@@ -229,6 +233,7 @@ it('keeps the owner of an event whose principal has gone', function (): void {
             model: 'gpt-4o',
         ),
         0.0,
+        false,
         false,
         [OwnerScope::principal($principalId)],
     );
@@ -273,6 +278,7 @@ it('debits the credit pool of every scope that has one', function (): void {
         ),
         1.5,
         true,
+        true,
         [OwnerScope::principal($principalId), OwnerScope::user($userId)],
     );
 
@@ -300,6 +306,7 @@ it('leaves a scope without a credit pool without one', function (): void {
         ),
         1.5,
         true,
+        true,
         [OwnerScope::principal($principalId)],
     );
 
@@ -324,8 +331,8 @@ it('adds the second event of a slot to the bucket of the first', function (): vo
         model: 'gpt-4o',
     );
 
-    $ledger->record($context, new LlmSubject('openai_compatible', 'gpt-4o'), $usage, 1.0, true, [OwnerScope::principal($principalId)]);
-    $ledger->record($context, new LlmSubject('openai_compatible', 'gpt-4o'), $usage, 2.0, true, [OwnerScope::principal($principalId)]);
+    $ledger->record($context, new LlmSubject('openai_compatible', 'gpt-4o'), $usage, 1.0, true, true, [OwnerScope::principal($principalId)]);
+    $ledger->record($context, new LlmSubject('openai_compatible', 'gpt-4o'), $usage, 2.0, true, true, [OwnerScope::principal($principalId)]);
 
     $buckets = bucketRows();
 
@@ -382,6 +389,7 @@ it('writes the bucket without reading it first', function (): void {
         ),
         1.5,
         true,
+        true,
         [OwnerScope::principal($principalId)],
     );
 
@@ -416,8 +424,8 @@ it('adds to an existing bucket rather than replacing it', function (): void {
     );
     $scopes = [OwnerScope::principal($principalId)];
 
-    $ledger->record($context, $subject, $usage, 1.5, true, $scopes);
-    $ledger->record($context, $subject, $usage, 2.5, true, $scopes);
+    $ledger->record($context, $subject, $usage, 1.5, true, true, $scopes);
+    $ledger->record($context, $subject, $usage, 2.5, true, true, $scopes);
 
     $bucket = Capsule::table('usage_buckets')->first();
 
@@ -448,6 +456,7 @@ it('stamps the bucket row it writes', function (): void {
             model: 'gpt-4o',
         ),
         1.5,
+        true,
         true,
         [OwnerScope::principal($principalId)],
     );
@@ -483,8 +492,8 @@ it('keeps the credits of a bucket on the eight-decimal grid', function (): void 
     );
     $scopes = [OwnerScope::principal($principalId)];
 
-    $ledger->record($context, $subject, $usage, 0.1 + 0.2, true, $scopes);
-    $ledger->record($context, $subject, $usage, 0.1 + 0.2, true, $scopes);
+    $ledger->record($context, $subject, $usage, 0.1 + 0.2, true, true, $scopes);
+    $ledger->record($context, $subject, $usage, 0.1 + 0.2, true, true, $scopes);
 
     $bucket = Capsule::table('usage_buckets')->first();
     $stored = (float) $bucket->credits;
@@ -518,8 +527,8 @@ it('writes the credits of a bucket with every decimal it was given', function ()
     );
     $scopes = [OwnerScope::principal($principalId)];
 
-    $ledger->record($context, $subject, $usage, 12345678.12345678, true, $scopes);
-    $ledger->record($context, $subject, $usage, 12345678.12345678, true, $scopes);
+    $ledger->record($context, $subject, $usage, 12345678.12345678, true, true, $scopes);
+    $ledger->record($context, $subject, $usage, 12345678.12345678, true, true, $scopes);
 
     $bucket = Capsule::table('usage_buckets')->first();
 

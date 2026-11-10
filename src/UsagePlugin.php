@@ -15,6 +15,7 @@ use Spora\Metering\UsageMeterInterface;
 use Spora\Plugins\AbstractPlugin;
 use Spora\Plugins\Usage\Http\UsageAdminController;
 use Spora\Plugins\Usage\Http\UsageController;
+use Spora\Plugins\Usage\Services\ConfigurationScope;
 use Spora\Plugins\Usage\Services\UsageLimitService;
 use Spora\Plugins\Usage\Settings\UsageSettingsProvider;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
@@ -93,6 +94,8 @@ final class UsagePlugin extends AbstractPlugin implements EventSubscriberInterfa
                 ->constructorParameter('logger', \DI\get(LoggerInterface::class)),
             UsageLimitService::class => \DI\autowire(UsageLimitService::class)
                 ->constructorParameter('logger', \DI\get(LoggerInterface::class)),
+            ConfigurationScope::class => \DI\autowire(ConfigurationScope::class)
+                ->constructorParameter('logger', \DI\get(LoggerInterface::class)),
             UsageController::class => \DI\autowire(),
             UsageAdminController::class => \DI\autowire(),
         ]);
@@ -128,7 +131,7 @@ final class UsagePlugin extends AbstractPlugin implements EventSubscriberInterfa
 
     public function schemaVersion(): int
     {
-        return 1;
+        return 2;
     }
 
     /**

@@ -36,8 +36,8 @@ jobs:
           coverage: none
           tools: composer
 
-      - name: Composer update spora-core
-        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+      - name: Resolve spora-core
+        run: ./.github/scripts/resolve-core.sh
 
       - name: Run Pest
         run: ./vendor/bin/pest
@@ -56,8 +56,8 @@ jobs:
           coverage: none
           tools: composer
 
-      - name: Composer update spora-core
-        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+      - name: Resolve spora-core
+        run: ./.github/scripts/resolve-core.sh
 
       - name: Run PHPStan
         # Match composer.json's "analyse" script so the 512M memory limit is used;
@@ -78,8 +78,8 @@ jobs:
           coverage: none
           tools: composer
 
-      - name: Composer update spora-core
-        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+      - name: Resolve spora-core
+        run: ./.github/scripts/resolve-core.sh
 
       - name: Check code style
         # Same ruleset as Spora core's .php-cs-fixer.php so plugin style matches host.
@@ -103,8 +103,8 @@ jobs:
           coverage: xdebug
           tools: composer
 
-      - name: Composer update spora-core
-        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
+      - name: Resolve spora-core
+        run: ./.github/scripts/resolve-core.sh
 
       - name: Generate clover coverage report
         run: ./vendor/bin/pest --coverage-clover=coverage.xml --coverage-filter=src

@@ -19,12 +19,31 @@ Requires `spora-ai/spora-core` ≥ 0.33.0 — the floor the manifest declares. T
 
 - **Meters every provider call and every tool call.** The core asks the meter before a request leaves and after it returns, so a run that is stopped by a limit is a run whose tokens are still counted.
 - **Prices a model on its provider and its name**, and falls back to a row with an empty provider — so one price covers every provider that runs the same model. A tool is priced on its fully-qualified class name (the wire name changes between plugin releases, the class does not) and may be narrowed to a single operation.
-- **Shows the work that is silently free.** A model or a tool with no price row costs nothing, and nothing else in the UI would say so. `GET /api/v1/usage/unpriced` lists what has been used and is not priced.
+- **Shows the work that is silently free.** A model or a tool with no price row costs nothing, and nothing else in the UI would say so. `GET /api/v1/usage/unpriced` lists what has been used and is not priced — and, separately, the calls that had a price and were not billed because the principal ran them with their own configuration.
 - **Charges the owner.** A group-shared agent charges the group pool; a user's own agent charges the user pool. An interactive run is charged to the individual as well as the owner; a run the platform started (a scheduled job) is charged to the owner alone — the trigger user of a platform-started run is whoever happened to fire the housekeeping, not an attribution.
 - **Enforces limits, hard or soft.** A hard limit stops the run; a soft one is recorded and the call proceeds. A limit is a cap on one window — the last hour, day, week or month, a rolling window of N hours, or all of time — measured in credits, total tokens, output tokens, LLM calls or tool calls.
 - **Spends against a credit pool.** A principal with a pool is debited on every metered event and blocked when the pool runs out. Credits are abstract: there is no currency, only a number the operator hands out.
 - **Never reserves.** The cost of a call is unknown before it runs, so a run can overshoot a cap by the cost of one turn plus one tool call, and two tasks running at once can both pass the gate. A lock cannot span a provider call, so the overshoot is inherent rather than a bug.
 - **Keeps the history on the principal, not on the task.** The ledger snapshots the owner, because a transferred agent's tasks are re-pointed and a ledger that followed them would move a group's March history onto its new owner.
+
+## What is billed
+
+**Only the work the installation pays for.** A principal who runs an agent with their own provider key, or who configures a tool with their own credentials, pays their own provider bill — so the installation does not charge them for it either. The call is still metered and still counted against their limits; it simply costs no credits.
+
+The rule in one line: **a metered event is billed when the configuration that served it was the installation's, and is not billed when the principal had a configuration of their own.**
+
+- **A model** is served by one configuration row, and the row says who owns it: a principal-owned row (`is_global = false`) is that principal's own key, and the global default is the installation's.
+- **A tool** is served by the installation's `tool_configurations` row unless the principal has a `tool_user_settings` row of their own for that tool class.
+
+**The rule belongs to this plugin, not to the core.** Core's seam reports what was metered and has no opinion about who pays — another metering plugin may bill every event and be equally right. Nothing about this rule is in the core.
+
+What it means for the limits:
+
+- A **credit** limit does not see a call that was not billed. There are no credits to count.
+- A **token** limit does see it. A cap on tokens is about the principal's own consumption, not about the installation's wallet.
+- A **call** limit does see it, for the same reason: a rate cap, not a money cap.
+
+A configuration whose scope cannot be resolved is **not** billed. The call is recorded, the operator can see it in the report, and charging a principal for a call whose payer is unknown is the worse mistake.
 
 ## Not in this release
 
@@ -48,7 +67,7 @@ Nine endpoints appear under `/api/v1/usage` after install. The two `me` routes a
 - `PUT /api/v1/usage/principals/{id}/credits` — grants an amount (a positive number adds to the balance, a negative one takes from it) and records a grant row.
 - `GET /api/v1/usage/prices` — the whole price book.
 - `PUT /api/v1/usage/prices` — replaces the **whole** price book.
-- `GET /api/v1/usage/unpriced` — the models and tools that have been used without a price row.
+- `GET /api/v1/usage/unpriced` — the models and tools that have been used without a price row, and the calls that had a price and were not billed.
 
 A malformed value is a **400** and a value the server reads but will not store — a window outside the vocabulary, a negative cap — is a **422**. A missing principal is a **404**, and two rows in one payload that would collide are a **409**.
 

@@ -27,7 +27,10 @@ use Illuminate\Database\Eloquent\Model;
  * @property int $output_tokens
  * @property int $cached_tokens
  * @property float $credits
- * @property bool $priced
+ * @property bool $priced Whether the price book had a row for the event.
+ * @property bool $billed Whether the credits were charged to a credit pool.
+ *                        A principal who ran the event with their own
+ *                        configuration has a price and was not charged.
  * @property int|null $task_id
  * @property int|null $agent_id
  * @property \Carbon\Carbon $occurred_at
@@ -55,6 +58,7 @@ final class UsageLedger extends Model
         'cached_tokens',
         'credits',
         'priced',
+        'billed',
         'task_id',
         'agent_id',
         'occurred_at',
@@ -76,6 +80,7 @@ final class UsageLedger extends Model
         'cached_tokens' => 'integer',
         'credits'       => 'float',
         'priced'        => 'boolean',
+        'billed'        => 'boolean',
         'task_id'       => 'integer',
         'agent_id'      => 'integer',
         'occurred_at'   => 'datetime',

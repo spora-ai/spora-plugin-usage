@@ -55,7 +55,7 @@ it('declares its migrations and its schema version', function (): void {
     $plugin = new UsagePlugin();
 
     expect(realpath($plugin->migrationsPath()))->toBe(realpath(BASE_PATH . '/database/migrations'));
-    expect($plugin->schemaVersion())->toBe(1);
+    expect($plugin->schemaVersion())->toBe(2);
 });
 
 it('contributes the usage app and the settings provider', function (): void {

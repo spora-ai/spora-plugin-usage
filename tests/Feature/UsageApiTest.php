@@ -296,6 +296,79 @@ it('lists the models that were metered without a price row', function (): void {
     expect($tools[0]['calls'])->toBe(1);
 });
 
+it('lists the calls that had a price and were not billed', function (): void {
+    // The principal ran these with their own configuration, so the
+    // installation did not pay for them. The price book had a row — the
+    // call was free for a different reason than an unpriced one.
+    [$router, $auth] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+    $principalId = createUserPrincipal($adminId);
+
+    Capsule::table('usage_ledger')->insert([
+        'principal_id'  => $principalId,
+        'principal_type' => 'user',
+        'kind'          => 'llm',
+        'provider'      => 'openai_compatible',
+        'model'         => 'their-own-model',
+        'input_tokens'  => 120,
+        'output_tokens' => 30,
+        'credits'       => 0,
+        'priced'        => true,
+        'billed'        => false,
+        'occurred_at'   => date('Y-m-d H:i:s'),
+    ]);
+
+    Capsule::table('usage_ledger')->insert([
+        'principal_id'  => $principalId,
+        'principal_type' => 'user',
+        'kind'          => 'tool',
+        'tool_name'     => 'weather',
+        'tool_class'    => 'Spora\\Tools\\WeatherTool',
+        'operation'     => 'forecast',
+        'credits'       => 0,
+        'priced'        => true,
+        'billed'        => false,
+        'occurred_at'   => date('Y-m-d H:i:s'),
+    ]);
+
+    Capsule::table('usage_ledger')->insert([
+        'principal_id'  => $principalId,
+        'principal_type' => 'user',
+        'kind'          => 'llm',
+        'provider'      => 'openai_compatible',
+        'model'         => 'the-installations-model',
+        'credits'       => 1.5,
+        'priced'        => true,
+        'billed'        => true,
+        'occurred_at'   => date('Y-m-d H:i:s'),
+    ]);
+
+    $response = usageGet($router, '/api/v1/usage/unpriced');
+
+    expect($response->getStatusCode())->toBe(200);
+
+    $notBilled = usageBody($response)['data']['not_billed'] ?? [];
+    expect($notBilled)->toBeArray();
+
+    $models = $notBilled['models'] ?? [];
+    expect(array_column($models, 'model'))->toContain('their-own-model');
+    expect(array_column($models, 'model'))->not->toContain('the-installations-model');
+    expect(array_keys($models[0]))->toEqualCanonicalizing(['provider', 'model', 'calls', 'tokens']);
+    expect($models[0]['calls'])->toBe(1);
+    expect($models[0]['tokens'])->toBe(150);
+
+    $tools = $notBilled['tools'] ?? [];
+    expect(array_column($tools, 'tool_name'))->toContain('weather');
+    expect(array_keys($tools[0]))->toEqualCanonicalizing(['tool_class', 'tool_name', 'calls']);
+    expect($tools[0]['calls'])->toBe(1);
+
+    // The unpriced report keeps its own rows to itself.
+    $unpriced = usageBody($response)['data']['models'] ?? [];
+    expect(array_column($unpriced, 'model'))->not->toContain('their-own-model');
+});
+
 it('replaces the price book with the given rows', function (): void {
     [$router, $auth, $csrf] = usageApi();
 
