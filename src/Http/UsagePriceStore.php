@@ -21,6 +21,11 @@ final class UsagePriceStore
 {
     private const TABLE_LEDGER = 'usage_ledger';
 
+    /**
+     * The aggregate that counts the calls of a group of rows.
+     */
+    private const COUNT_CALLS = 'count(*) as calls';
+
     private const TABLE_PRICES = 'usage_prices';
 
     /**
@@ -122,7 +127,7 @@ final class UsagePriceStore
             ->where('priced', false)
             ->where('kind', '!=', 'tool')
             ->select(['provider', 'model'])
-            ->selectRaw('count(*) as calls')
+            ->selectRaw(self::COUNT_CALLS)
             ->groupBy('provider', 'model')
             ->get();
 
@@ -149,7 +154,7 @@ final class UsagePriceStore
             ->where('priced', false)
             ->where('kind', 'tool')
             ->select(['tool_name', 'tool_class'])
-            ->selectRaw('count(*) as calls')
+            ->selectRaw(self::COUNT_CALLS)
             ->groupBy('tool_name', 'tool_class')
             ->get();
 
@@ -181,7 +186,7 @@ final class UsagePriceStore
             ->where('priced', true)
             ->where('kind', '!=', 'tool')
             ->select(['provider', 'model'])
-            ->selectRaw('count(*) as calls')
+            ->selectRaw(self::COUNT_CALLS)
             ->selectRaw('sum(input_tokens + output_tokens) as tokens')
             ->groupBy('provider', 'model')
             ->get();
@@ -211,7 +216,7 @@ final class UsagePriceStore
             ->where('priced', true)
             ->where('kind', 'tool')
             ->select(['tool_name', 'tool_class'])
-            ->selectRaw('count(*) as calls')
+            ->selectRaw(self::COUNT_CALLS)
             ->groupBy('tool_name', 'tool_class')
             ->get();
 

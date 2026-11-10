@@ -63,15 +63,11 @@ final class ConfigurationScope
     public function isInstallationScoped(MeteringContext $context, MeteringSubject $subject): bool
     {
         try {
-            if ($subject instanceof LlmSubject) {
-                return $this->llmIsInstallationScoped($context);
-            }
-
-            if ($subject instanceof ToolSubject) {
-                return $this->toolIsInstallationScoped($context, $subject);
-            }
-
-            return true;
+            return match (true) {
+                $subject instanceof LlmSubject => $this->llmIsInstallationScoped($context),
+                $subject instanceof ToolSubject => $this->toolIsInstallationScoped($context, $subject),
+                default => true,
+            };
         } catch (Throwable $e) {
             $this->logger?->warning(
                 'The configuration scope could not be resolved — the event is recorded but not billed',

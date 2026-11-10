@@ -9,7 +9,6 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Spora\Models\Principal;
-use Spora\Plugins\Usage\Models\UsageDefaultLimit;
 use Spora\Plugins\Usage\Models\UsageLimit;
 use Spora\Plugins\Usage\Services\OwnerScope;
 use Spora\Plugins\Usage\Services\WindowCalculator;
@@ -17,12 +16,13 @@ use Spora\Plugins\Usage\ValueObjects\CreditAmount;
 use Spora\Plugins\Usage\ValueObjects\WindowRange;
 
 /**
- * Read and write access to the owner's own usage: the buckets, the limits,
- * the credit balances and the credit grants.
+ * Read and write access to the owner's own usage: the principals, the
+ * buckets, the credit balances and the credit grants.
  *
  * This class is the only place that knows their column names, so a schema
- * change lands in one file instead of in every controller. The price book
- * and the unpriced report are {@see UsagePriceStore}'s.
+ * change lands in one file instead of in every controller. The limits and
+ * the default sets are {@see UsageLimitStore}'s, the price book and the
+ * unpriced report are {@see UsagePriceStore}'s.
  *
  * The windows are the meter's windows: {@see WindowCalculator} is the same
  * calculator the gate uses, so the number the panel shows and the number the
@@ -35,10 +35,6 @@ final class UsageStore
     private const TABLE_CREDITS = 'usage_credits';
 
     private const TABLE_GRANTS = 'usage_credit_grants';
-
-    private const TABLE_LIMITS = 'usage_limits';
-
-    private const TABLE_DEFAULT_LIMITS = 'usage_default_limits';
 
     private const TIMESTAMP_FORMAT = 'Y-m-d H:i:s';
 
@@ -73,6 +69,7 @@ final class UsageStore
 
     public function __construct(
         private readonly WindowCalculator $windows,
+        private readonly UsageLimitStore $limits,
     ) {}
 
     /**
@@ -128,7 +125,7 @@ final class UsageStore
             return null;
         }
 
-        $limits = $this->effectiveLimits($principalId);
+        $limits = $this->limits->effectiveLimits($principalId, $principal['type']);
         $balance = $this->creditBalance(OwnerScope::TYPE_PRINCIPAL, $principalId);
         $spend = $this->spendByWindow(OwnerScope::TYPE_PRINCIPAL, $principalId, $limits, $now);
 
@@ -145,66 +142,7 @@ final class UsageStore
         ];
     }
 
-    /**
-     * The limits of one owner scope.
-     *
-     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
-     */
-    public function limits(string $ownerType, int $ownerId): array
-    {
-        $rows = Capsule::table(self::TABLE_LIMITS)
-            ->where('owner_type', $ownerType)
-            ->where('owner_id', $ownerId)
-            ->orderBy('window')
-            ->orderBy('window_size')
-            ->orderBy('unit')
-            ->get();
 
-        $limits = [];
-        foreach ($rows as $row) {
-            $limits[] = [
-                'window' => (string) $row->window,
-                'window_size' => (int) $row->window_size,
-                'unit' => (string) $row->unit,
-                'cap' => $this->numericCap((string) $row->unit, $row->cap),
-                'mode' => (string) $row->mode,
-                'enabled' => (bool) $row->enabled,
-            ];
-        }
-
-        return $limits;
-    }
-
-    /**
-     * Replace the limits of one owner scope with the given set.
-     *
-     * The set is replaced whole: a limit that is absent from the new set is
-     * deleted, so the payload is the truth about which limits exist.
-     *
-     * @param list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}> $limits
-     */
-    public function replaceLimits(string $ownerType, int $ownerId, array $limits): void
-    {
-        Capsule::connection()->transaction(function () use ($ownerType, $ownerId, $limits): void {
-            Capsule::table(self::TABLE_LIMITS)
-                ->where('owner_type', $ownerType)
-                ->where('owner_id', $ownerId)
-                ->delete();
-
-            foreach ($limits as $limit) {
-                Capsule::table(self::TABLE_LIMITS)->insert([
-                    'owner_type'  => $ownerType,
-                    'owner_id'    => $ownerId,
-                    'window'      => $limit['window'],
-                    'window_size' => $limit['window_size'],
-                    'unit'        => $limit['unit'],
-                    'cap'         => $limit['cap'],
-                    'mode'        => $limit['mode'],
-                    'enabled'     => $limit['enabled'],
-                ]);
-            }
-        });
-    }
 
     /**
      * The limits a principal has of their own, with what each window has
@@ -217,7 +155,7 @@ final class UsageStore
      */
     public function ownLimits(int $principalId, DateTimeImmutable $now): array
     {
-        $rows = $this->limits(OwnerScope::TYPE_PRINCIPAL, $principalId);
+        $rows = $this->limits->limits(OwnerScope::TYPE_PRINCIPAL, $principalId);
 
         return array_map(
             fn(array $limit): array => $this->limitWithSpend(
@@ -229,160 +167,11 @@ final class UsageStore
         );
     }
 
-    /**
-     * The limits that govern a principal.
-     *
-     * A principal with rows of their own is governed by them. A principal
-     * with none is governed by the default for their type — the set for
-     * users, the set for groups, or the general set when their type has
-     * none of its own.
-     *
-     * The rows say where they came from, so a summary that shows a
-     * principal's limits does not claim they are the principal's own when
-     * they are the operator's default.
-     *
-     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool, source: string}>
-     */
-    public function effectiveLimits(int $principalId): array
-    {
-        $own = $this->limits(OwnerScope::TYPE_PRINCIPAL, $principalId);
 
-        if ($own !== []) {
-            return array_map(
-                static fn(array $limit): array => $limit + ['source' => 'principal'],
-                $own,
-            );
-        }
 
-        $scope = $this->defaultScopeFor($principalId);
-        $defaults = $this->enabledDefaultLimitsOf($scope);
 
-        if ($defaults === [] && $scope !== UsageDefaultLimit::SCOPE_ALL) {
-            $scope = UsageDefaultLimit::SCOPE_ALL;
-            $defaults = $this->enabledDefaultLimitsOf($scope);
-        }
 
-        return array_map(
-            static fn(array $limit): array => $limit + ['source' => 'default'],
-            $defaults,
-        );
-    }
 
-    /**
-     * The default limit set of one scope, with the rows that are switched
-     * on.
-     *
-     * The set that governs is the one with something switched on: a set
-     * with nothing switched on is no set, and the general default stands
-     * in for it. The gate decides the same way, so the summary and the
-     * gate never name different sets.
-     *
-     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
-     */
-    private function enabledDefaultLimitsOf(string $scope): array
-    {
-        return array_values(array_filter(
-            $this->defaultLimitsOf($scope),
-            static fn(array $limit): bool => $limit['enabled'],
-        ));
-    }
-
-    /**
-     * The scope of the default that governs a principal.
-     *
-     * A user principal is governed by the set for users and a group
-     * principal by the set for groups.
-     */
-    private function defaultScopeFor(int $principalId): string
-    {
-        $principal = $this->principal($principalId);
-
-        return ($principal['type'] ?? Principal::TYPE_USER) === Principal::TYPE_GROUP
-            ? UsageDefaultLimit::SCOPE_GROUP
-            : UsageDefaultLimit::SCOPE_USER;
-    }
-
-    /**
-     * The default limit sets, one per scope.
-     *
-     * @return array{all: list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>, user: list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>, group: list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>}
-     */
-    public function defaultLimits(): array
-    {
-        $sets = [];
-
-        foreach (UsageDefaultLimit::SCOPES as $scope) {
-            $sets[$scope] = $this->defaultLimitsOf($scope);
-        }
-
-        return $sets;
-    }
-
-    /**
-     * The default limit set of one scope.
-     *
-     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
-     */
-    public function defaultLimitsOf(string $scope): array
-    {
-        $rows = Capsule::table(self::TABLE_DEFAULT_LIMITS)
-            ->where('scope', $scope)
-            ->orderBy('window')
-            ->orderBy('window_size')
-            ->orderBy('unit')
-            ->get();
-
-        $limits = [];
-        foreach ($rows as $row) {
-            $limits[] = [
-                'window' => (string) $row->window,
-                'window_size' => (int) $row->window_size,
-                'unit' => (string) $row->unit,
-                'cap' => $this->numericCap((string) $row->unit, $row->cap),
-                'mode' => (string) $row->mode,
-                'enabled' => (bool) $row->enabled,
-            ];
-        }
-
-        return $limits;
-    }
-
-    /**
-     * Replace the default limit sets that are in the payload.
-     *
-     * A scope that is in the payload is replaced whole: a limit that is
-     * absent from it is deleted. A scope that is **not** in the payload is
-     * left as it is — a payload that names one scope must not silently
-     * clear the other two.
-     *
-     * @param array<string, list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>> $sets
-     */
-    public function replaceDefaultLimits(array $sets): void
-    {
-        Capsule::connection()->transaction(function () use ($sets): void {
-            foreach ($sets as $scope => $limits) {
-                if (!in_array($scope, UsageDefaultLimit::SCOPES, true)) {
-                    continue;
-                }
-
-                Capsule::table(self::TABLE_DEFAULT_LIMITS)
-                    ->where('scope', $scope)
-                    ->delete();
-
-                foreach ($limits as $limit) {
-                    Capsule::table(self::TABLE_DEFAULT_LIMITS)->insert([
-                        'scope'       => $scope,
-                        'window'      => $limit['window'],
-                        'window_size' => $limit['window_size'],
-                        'unit'        => $limit['unit'],
-                        'cap'         => $limit['cap'],
-                        'mode'        => $limit['mode'],
-                        'enabled'     => $limit['enabled'],
-                    ]);
-                }
-            }
-        });
-    }
 
     /**
      * The credit balance of one owner scope, or null when it has no pool.
@@ -662,15 +451,6 @@ final class UsageStore
             ->format(self::SLOT_FORMAT);
     }
 
-    /**
-     * A count cap stays an integer; a credit cap is a decimal.
-     */
-    private function numericCap(string $unit, mixed $cap): float|int
-    {
-        return $unit === UsageLimit::UNIT_CREDITS
-            ? CreditAmount::round((float) $cap)
-            : (int) $cap;
-    }
 
     private function userLabel(int $userId): string
     {

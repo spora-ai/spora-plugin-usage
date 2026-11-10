@@ -33,6 +33,7 @@ final class UsageAdminController
 
     public function __construct(
         private readonly UsageStore $store,
+        private readonly UsageLimitStore $limitStore,
         private readonly UsagePriceStore $priceStore,
         private readonly UsagePayloadParser $parser,
     ) {}
@@ -111,7 +112,7 @@ final class UsageAdminController
             return $this->error($e->errorCode, $e->getMessage(), $e->status);
         }
 
-        $this->store->replaceLimits(OwnerScope::TYPE_PRINCIPAL, $id, $limits);
+        $this->limitStore->replaceLimits(OwnerScope::TYPE_PRINCIPAL, $id, $limits);
 
         // The answer carries the stored rows with their figures, which the
         // summary already holds.
@@ -167,7 +168,7 @@ final class UsageAdminController
      */
     public function defaults(): JsonResponse
     {
-        return new JsonResponse(['data' => ['defaults' => $this->store->defaultLimits()]]);
+        return new JsonResponse(['data' => ['defaults' => $this->limitStore->defaultLimits()]]);
     }
 
     /**
@@ -183,9 +184,9 @@ final class UsageAdminController
             return $this->error($e->errorCode, $e->getMessage(), $e->status);
         }
 
-        $this->store->replaceDefaultLimits($sets);
+        $this->limitStore->replaceDefaultLimits($sets);
 
-        return new JsonResponse(['data' => ['defaults' => $this->store->defaultLimits()]]);
+        return new JsonResponse(['data' => ['defaults' => $this->limitStore->defaultLimits()]]);
     }
 
     /**
