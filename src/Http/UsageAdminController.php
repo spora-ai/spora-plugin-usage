@@ -73,7 +73,9 @@ final class UsageAdminController
                 'name' => $summary['name'],
             ],
             'balance' => $summary['balance'],
-            'limits' => $summary['limits'],
+            // The principal's own rows, and not the default that governs
+            // them: this is the set the panel edits.
+            'limits' => $this->store->ownLimits($id, $now),
             'spend' => [
                 'credits_30d' => $summary['spend_30d'],
                 // The token total is the same window's other counter: the

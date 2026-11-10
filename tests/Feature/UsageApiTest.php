@@ -369,6 +369,71 @@ it('lists the calls that had a price and were not billed', function (): void {
     expect(array_column($unpriced, 'model'))->not->toContain('their-own-model');
 });
 
+it('shows the caller the limits that govern them, and where they came from', function (): void {
+    [$router, $auth] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+    $principalId = createUserPrincipal($adminId);
+
+    Capsule::table('usage_default_limits')->insert([
+        'scope'       => 'user',
+        'window'      => 'month',
+        'window_size' => 1,
+        'unit'        => 'credits',
+        'cap'         => 1000,
+        'mode'        => 'hard',
+        'enabled'     => true,
+    ]);
+
+    $response = usageGet($router, '/api/v1/usage/me');
+
+    $principal = usageBody($response)['data']['principals'][0] ?? [];
+
+    // The principal has no limits of their own, so the default governs
+    // them — and the row says so rather than claiming to be theirs.
+    expect($principal['limits'])->toHaveCount(1);
+    expect($principal['limits'][0]['cap'])->toBe(1000);
+    expect($principal['limits'][0]['source'])->toBe('default');
+});
+
+it('shows the caller their own limits when they have them', function (): void {
+    [$router, $auth] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+    $principalId = createUserPrincipal($adminId);
+
+    Capsule::table('usage_default_limits')->insert([
+        'scope'       => 'user',
+        'window'      => 'month',
+        'window_size' => 1,
+        'unit'        => 'credits',
+        'cap'         => 1000,
+        'mode'        => 'hard',
+        'enabled'     => true,
+    ]);
+
+    Capsule::table('usage_limits')->insert([
+        'owner_type'  => 'principal',
+        'owner_id'    => $principalId,
+        'window'      => 'day',
+        'window_size' => 1,
+        'unit'        => 'credits',
+        'cap'         => 100,
+        'mode'        => 'hard',
+        'enabled'     => true,
+    ]);
+
+    $response = usageGet($router, '/api/v1/usage/me');
+
+    $principal = usageBody($response)['data']['principals'][0] ?? [];
+
+    expect($principal['limits'])->toHaveCount(1);
+    expect($principal['limits'][0]['cap'])->toBe(100);
+    expect($principal['limits'][0]['source'])->toBe('principal');
+});
+
 it('reads the default limit sets', function (): void {
     [$router, $auth] = usageApi();
 
@@ -614,7 +679,7 @@ it('names the callers own overview the way the contract names it', function (): 
         'id', 'type', 'name', 'balance', 'spend_30d', 'limits',
     ]);
     expect(array_keys($principal['limits'][0]))->toEqualCanonicalizing([
-        'window', 'window_size', 'unit', 'cap', 'mode', 'enabled', 'spend', 'remaining',
+        'window', 'window_size', 'unit', 'cap', 'mode', 'enabled', 'source', 'spend', 'remaining',
     ]);
 });
 
@@ -702,7 +767,7 @@ it('names the limit save and the grant the way the contract names them', functio
     $data = usageBody($limits)['data'];
     expect(array_keys($data))->toEqualCanonicalizing(['limits']);
     expect(array_keys($data['limits'][0]))->toEqualCanonicalizing([
-        'window', 'window_size', 'unit', 'cap', 'mode', 'enabled', 'spend', 'remaining',
+        'window', 'window_size', 'unit', 'cap', 'mode', 'enabled', 'source', 'spend', 'remaining',
     ]);
 
     $grant = usagePut($router, $csrf, "/api/v1/usage/principals/{$principalId}/credits", [

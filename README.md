@@ -22,6 +22,7 @@ Requires `spora-ai/spora-core` ≥ 0.33.0 — the floor the manifest declares. T
 - **Shows the work that is silently free.** A model or a tool with no price row costs nothing, and nothing else in the UI would say so. `GET /api/v1/usage/unpriced` lists what has been used and is not priced — and, separately, the calls that had a price and were not billed because the principal ran them with their own configuration.
 - **Charges the owner.** A group-shared agent charges the group pool; a user's own agent charges the user pool. An interactive run is charged to the individual as well as the owner; a run the platform started (a scheduled job) is charged to the owner alone — the trigger user of a platform-started run is whoever happened to fire the housekeeping, not an attribution.
 - **Enforces limits, hard or soft.** A hard limit stops the run; a soft one is recorded and the call proceeds. A limit is a cap on one window — the last hour, day, week or month, a rolling window of N hours, or all of time — measured in credits, total tokens, output tokens, LLM calls or tool calls.
+- **Falls back to a default.** A principal with no limits of their own is held to the default, so nobody is left unlimited by accident. See [Default limits](#default-limits).
 - **Spends against a credit pool.** A principal with a pool is debited on every metered event and blocked when the pool runs out. Credits are abstract: there is no currency, only a number the operator hands out.
 - **Never reserves.** The cost of a call is unknown before it runs, so a run can overshoot a cap by the cost of one turn plus one tool call, and two tasks running at once can both pass the gate. A lock cannot span a provider call, so the overshoot is inherent rather than a bug.
 - **Keeps the history on the principal, not on the task.** The ledger snapshots the owner, because a transferred agent's tasks are re-pointed and a ledger that followed them would move a group's March history onto its new owner.
@@ -45,6 +46,26 @@ What it means for the limits:
 
 A configuration whose scope cannot be resolved is **not** billed. The call is recorded, the operator can see it in the report, and charging a principal for a call whose payer is unknown is the worse mistake.
 
+## Default limits
+
+**A principal with no limits of their own is held to the default.** A limit set on one principal says nothing about the next one, so an operator who forgets to configure somebody leaves them unlimited. The defaults are the answer to that.
+
+Three sets, and each one is optional:
+
+| Scope   | Who it holds                                                        |
+| ------- | ------------------------------------------------------------------- |
+| `all`   | every principal that has no limits of their own                     |
+| `user`  | the principals of a user — replaces `all` for users                |
+| `group` | the principals of a group — replaces `all` for groups              |
+
+**The type's set replaces the general one.** A principal of type `user` uses the `user` set when there is one, and the `all` set otherwise. An operator who wants users held to a tighter rule can say so without losing the rule that holds everybody else.
+
+**An individual is a user, and a user is a principal of type `user`.** The individual scope — the person charged additionally for an interactive run — is held to the default for users. It has no limits of its own and no route to give it any, so before the defaults existed it was the one scope that could never be capped.
+
+**A limit row of the owner's own — even a switched-off one — is a configuration**, so the default does not stand in for it. A principal with a generous limit of their own is not held to the default; a principal with no row at all is.
+
+The cap is measured against the owner's **own** spend, as every limit is: a default of 1 000 credits a month holds each principal to 1 000 credits of their own.
+
 ## Not in this release
 
 **The individual scope is charged but not yet configurable through the API.** An interactive run is charged to the triggering individual as well as to the owner, and the ledger records both. The admin API covers the **principal** scope only: there is no route that lists, limits or grants against a *user* scope, so a per-user allowance can only be created by writing the `usage_limits` / `usage_credits` rows directly.
@@ -57,7 +78,7 @@ Every window is **rolling**, never a calendar boundary: a day cap is the last 24
 
 ## API surface
 
-Nine endpoints appear under `/api/v1/usage` after install. The two `me` routes answer for the caller's own visible principals; every other route is behind the admin gate.
+Eleven endpoints appear under `/api/v1/usage` after install. The two `me` routes answer for the caller's own visible principals; every other route is behind the admin gate.
 
 - `GET /api/v1/usage/me` — the balances, the limits with what is left of each window, and the spend of the last 30 days of every principal the caller can act for.
 - `GET /api/v1/usage/me/series?window=day|week|month` — the spend over a window, bucketed.
@@ -67,6 +88,8 @@ Nine endpoints appear under `/api/v1/usage` after install. The two `me` routes a
 - `PUT /api/v1/usage/principals/{id}/credits` — grants an amount (a positive number adds to the balance, a negative one takes from it) and records a grant row.
 - `GET /api/v1/usage/prices` — the whole price book.
 - `PUT /api/v1/usage/prices` — replaces the **whole** price book.
+- `GET /api/v1/usage/defaults` — the default limit sets, one per scope.
+- `PUT /api/v1/usage/defaults` — replaces the default limit sets that are **in the payload**; a scope that is not in the payload is left as it is.
 - `GET /api/v1/usage/unpriced` — the models and tools that have been used without a price row, and the calls that had a price and were not billed.
 
 A malformed value is a **400** and a value the server reads but will not store — a window outside the vocabulary, a negative cap — is a **422**. A missing principal is a **404**, and two rows in one payload that would collide are a **409**.

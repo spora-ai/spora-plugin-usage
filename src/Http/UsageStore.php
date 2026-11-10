@@ -128,7 +128,7 @@ final class UsageStore
             return null;
         }
 
-        $limits = $this->limits(OwnerScope::TYPE_PRINCIPAL, $principalId);
+        $limits = $this->effectiveLimits($principalId);
         $balance = $this->creditBalance(OwnerScope::TYPE_PRINCIPAL, $principalId);
         $spend = $this->spendByWindow(OwnerScope::TYPE_PRINCIPAL, $principalId, $limits, $now);
 
@@ -204,6 +204,83 @@ final class UsageStore
                 ]);
             }
         });
+    }
+
+    /**
+     * The limits a principal has of their own, with what each window has
+     * spent.
+     *
+     * This is the set the panel edits, so it is the principal's own rows
+     * and not the default that stands in for them.
+     *
+     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool, source: string, spend: float, remaining: float}>
+     */
+    public function ownLimits(int $principalId, DateTimeImmutable $now): array
+    {
+        $rows = $this->limits(OwnerScope::TYPE_PRINCIPAL, $principalId);
+
+        return array_map(
+            fn(array $limit): array => $this->limitWithSpend(
+                $limit + ['source' => 'principal'],
+                $principalId,
+                $now,
+            ),
+            $rows,
+        );
+    }
+
+    /**
+     * The limits that govern a principal.
+     *
+     * A principal with rows of their own is governed by them. A principal
+     * with none is governed by the default for their type — the set for
+     * users, the set for groups, or the general set when their type has
+     * none of its own.
+     *
+     * The rows say where they came from, so a summary that shows a
+     * principal's limits does not claim they are the principal's own when
+     * they are the operator's default.
+     *
+     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool, source: string}>
+     */
+    public function effectiveLimits(int $principalId): array
+    {
+        $own = $this->limits(OwnerScope::TYPE_PRINCIPAL, $principalId);
+
+        if ($own !== []) {
+            return array_map(
+                static fn(array $limit): array => $limit + ['source' => 'principal'],
+                $own,
+            );
+        }
+
+        $scope = $this->defaultScopeFor($principalId);
+        $defaults = $this->defaultLimitsOf($scope);
+
+        if ($defaults === [] && $scope !== UsageDefaultLimit::SCOPE_ALL) {
+            $scope = UsageDefaultLimit::SCOPE_ALL;
+            $defaults = $this->defaultLimitsOf($scope);
+        }
+
+        return array_map(
+            static fn(array $limit): array => $limit + ['source' => 'default'],
+            $defaults,
+        );
+    }
+
+    /**
+     * The scope of the default that governs a principal.
+     *
+     * A user principal is governed by the set for users and a group
+     * principal by the set for groups.
+     */
+    private function defaultScopeFor(int $principalId): string
+    {
+        $principal = $this->principal($principalId);
+
+        return ($principal['type'] ?? Principal::TYPE_USER) === Principal::TYPE_GROUP
+            ? UsageDefaultLimit::SCOPE_GROUP
+            : UsageDefaultLimit::SCOPE_USER;
     }
 
     /**
@@ -495,8 +572,8 @@ final class UsageStore
     }
 
     /**
-     * @param array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool} $limit
-     * @return array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool, spend: float, remaining: float}
+     * @param array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool, source?: string} $limit
+     * @return array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool, source: string, spend: float, remaining: float}
      */
     private function limitWithSpend(array $limit, int $principalId, DateTimeImmutable $now): array
     {
@@ -516,6 +593,9 @@ final class UsageStore
             'cap' => $limit['cap'],
             'mode' => $limit['mode'],
             'enabled' => $limit['enabled'],
+            // Where the row came from: the principal's own, or the
+            // operator's default that stands in for them.
+            'source' => $limit['source'] ?? 'principal',
             'spend' => $spend,
             // Signed on purpose: a negative remainder is how an overshoot
             // shows up, and clamping it to zero would hide the size of it.
