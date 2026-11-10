@@ -38,6 +38,12 @@ jobs:
 
       - name: Resolve spora-core
         run: ./.github/scripts/resolve-core.sh
+        env:
+          # Composer's GitHub API calls are unauthenticated otherwise, and
+          # the runner pool shares one rate limit: sixty requests an hour
+          # for every job on the pool. A refused rate limit has nothing to
+          # do with this branch and fails the suite.
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
 
       - name: Run Pest
         run: ./vendor/bin/pest
@@ -58,6 +64,12 @@ jobs:
 
       - name: Resolve spora-core
         run: ./.github/scripts/resolve-core.sh
+        env:
+          # Composer's GitHub API calls are unauthenticated otherwise, and
+          # the runner pool shares one rate limit: sixty requests an hour
+          # for every job on the pool. A refused rate limit has nothing to
+          # do with this branch and fails the suite.
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
 
       - name: Run PHPStan
         # Match composer.json's "analyse" script so the 512M memory limit is used;
@@ -80,6 +92,12 @@ jobs:
 
       - name: Resolve spora-core
         run: ./.github/scripts/resolve-core.sh
+        env:
+          # Composer's GitHub API calls are unauthenticated otherwise, and
+          # the runner pool shares one rate limit: sixty requests an hour
+          # for every job on the pool. A refused rate limit has nothing to
+          # do with this branch and fails the suite.
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
 
       - name: Check code style
         # Same ruleset as Spora core's .php-cs-fixer.php so plugin style matches host.
@@ -105,6 +123,12 @@ jobs:
 
       - name: Resolve spora-core
         run: ./.github/scripts/resolve-core.sh
+        env:
+          # Composer's GitHub API calls are unauthenticated otherwise, and
+          # the runner pool shares one rate limit: sixty requests an hour
+          # for every job on the pool. A refused rate limit has nothing to
+          # do with this branch and fails the suite.
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
 
       - name: Generate clover coverage report
         run: ./vendor/bin/pest --coverage-clover=coverage.xml --coverage-filter=src
