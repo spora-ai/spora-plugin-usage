@@ -161,6 +161,32 @@ final class UsageAdminController
     }
 
     /**
+     * The default limit sets, one per scope.
+     */
+    public function defaults(): JsonResponse
+    {
+        return new JsonResponse(['data' => ['defaults' => $this->store->defaultLimits()]]);
+    }
+
+    /**
+     * Replace the default limit sets that are in the payload.
+     *
+     * A scope that is not in the payload is left as it is.
+     */
+    public function replaceDefaults(Request $request): JsonResponse
+    {
+        try {
+            $sets = $this->parser->parseDefaultLimits($request);
+        } catch (UsagePayloadException $e) {
+            return $this->error($e->errorCode, $e->getMessage(), $e->status);
+        }
+
+        $this->store->replaceDefaultLimits($sets);
+
+        return new JsonResponse(['data' => ['defaults' => $this->store->defaultLimits()]]);
+    }
+
+    /**
      * Replace the price book with the given rows.
      */
     public function replacePrices(Request $request): JsonResponse

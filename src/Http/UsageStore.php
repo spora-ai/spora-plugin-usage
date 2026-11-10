@@ -9,6 +9,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Database\Capsule\Manager as Capsule;
 use Spora\Models\Principal;
+use Spora\Plugins\Usage\Models\UsageDefaultLimit;
 use Spora\Plugins\Usage\Models\UsageLimit;
 use Spora\Plugins\Usage\Services\OwnerScope;
 use Spora\Plugins\Usage\Services\WindowCalculator;
@@ -36,6 +37,8 @@ final class UsageStore
     private const TABLE_GRANTS = 'usage_credit_grants';
 
     private const TABLE_LIMITS = 'usage_limits';
+
+    private const TABLE_DEFAULT_LIMITS = 'usage_default_limits';
 
     private const TIMESTAMP_FORMAT = 'Y-m-d H:i:s';
 
@@ -199,6 +202,88 @@ final class UsageStore
                     'mode'        => $limit['mode'],
                     'enabled'     => $limit['enabled'],
                 ]);
+            }
+        });
+    }
+
+    /**
+     * The default limit sets, one per scope.
+     *
+     * @return array{all: list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>, user: list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>, group: list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>}
+     */
+    public function defaultLimits(): array
+    {
+        $sets = [];
+
+        foreach (UsageDefaultLimit::SCOPES as $scope) {
+            $sets[$scope] = $this->defaultLimitsOf($scope);
+        }
+
+        return $sets;
+    }
+
+    /**
+     * The default limit set of one scope.
+     *
+     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
+     */
+    public function defaultLimitsOf(string $scope): array
+    {
+        $rows = Capsule::table(self::TABLE_DEFAULT_LIMITS)
+            ->where('scope', $scope)
+            ->orderBy('window')
+            ->orderBy('window_size')
+            ->orderBy('unit')
+            ->get();
+
+        $limits = [];
+        foreach ($rows as $row) {
+            $limits[] = [
+                'window' => (string) $row->window,
+                'window_size' => (int) $row->window_size,
+                'unit' => (string) $row->unit,
+                'cap' => $this->numericCap((string) $row->unit, $row->cap),
+                'mode' => (string) $row->mode,
+                'enabled' => (bool) $row->enabled,
+            ];
+        }
+
+        return $limits;
+    }
+
+    /**
+     * Replace the default limit sets that are in the payload.
+     *
+     * A scope that is in the payload is replaced whole: a limit that is
+     * absent from it is deleted. A scope that is **not** in the payload is
+     * left as it is — a payload that names one scope must not silently
+     * clear the other two.
+     *
+     * @param array<string, list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>> $sets
+     */
+    public function replaceDefaultLimits(array $sets): void
+    {
+        Capsule::connection()->transaction(function () use ($sets): void {
+            foreach ($sets as $scope => $limits) {
+                if (!in_array($scope, UsageDefaultLimit::SCOPES, true)) {
+                    continue;
+                }
+
+                Capsule::table(self::TABLE_DEFAULT_LIMITS)
+                    ->where('scope', $scope)
+                    ->delete();
+
+                foreach ($limits as $limit) {
+                    Capsule::table(self::TABLE_DEFAULT_LIMITS)->insert([
+                        'scope'       => $scope,
+                        'window'      => $limit['window'],
+                        'window_size' => $limit['window_size'],
+                        'unit'        => $limit['unit'],
+                        'cap'         => $limit['cap'],
+                        'mode'        => $limit['mode'],
+                        'enabled'     => $limit['enabled'],
+                    ]);
+                }
             }
         });
     }

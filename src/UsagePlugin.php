@@ -53,6 +53,8 @@ final class UsagePlugin extends AbstractPlugin implements EventSubscriberInterfa
 
     private const ROUTE_PRICES = self::ROUTE_BASE . '/prices';
 
+    private const ROUTE_DEFAULTS = self::ROUTE_BASE . '/defaults';
+
     private const ROUTE_UNPRICED = self::ROUTE_BASE . '/unpriced';
 
     private const AUTH = [AuthMiddleware::class, CsrfMiddleware::class];
@@ -121,6 +123,8 @@ final class UsagePlugin extends AbstractPlugin implements EventSubscriberInterfa
         $routes->addRoute('PUT', self::ROUTE_PRINCIPAL_CREDITS, [UsageAdminController::class, 'grantCredits'], self::ADMIN);
         $routes->addRoute('GET', self::ROUTE_PRICES, [UsageAdminController::class, 'prices'], self::ADMIN);
         $routes->addRoute('PUT', self::ROUTE_PRICES, [UsageAdminController::class, 'replacePrices'], self::ADMIN);
+        $routes->addRoute('GET', self::ROUTE_DEFAULTS, [UsageAdminController::class, 'defaults'], self::ADMIN);
+        $routes->addRoute('PUT', self::ROUTE_DEFAULTS, [UsageAdminController::class, 'replaceDefaults'], self::ADMIN);
         $routes->addRoute('GET', self::ROUTE_UNPRICED, [UsageAdminController::class, 'unpriced'], self::ADMIN);
     }
 
@@ -131,7 +135,7 @@ final class UsagePlugin extends AbstractPlugin implements EventSubscriberInterfa
 
     public function schemaVersion(): int
     {
-        return 2;
+        return 3;
     }
 
     /**

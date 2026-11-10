@@ -369,6 +369,113 @@ it('lists the calls that had a price and were not billed', function (): void {
     expect(array_column($unpriced, 'model'))->not->toContain('their-own-model');
 });
 
+it('reads the default limit sets', function (): void {
+    [$router, $auth] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+
+    Capsule::table('usage_default_limits')->insert([
+        'scope' => 'all',
+        'window' => 'month',
+        'window_size' => 1,
+        'unit' => 'credits',
+        'cap' => 1000,
+        'mode' => 'hard',
+        'enabled' => true,
+    ]);
+
+    $response = usageGet($router, '/api/v1/usage/defaults');
+
+    expect($response->getStatusCode())->toBe(200);
+
+    $defaults = usageBody($response)['data']['defaults'] ?? [];
+    expect(array_keys($defaults))->toEqualCanonicalizing(['all', 'user', 'group']);
+    expect($defaults['all'])->toHaveCount(1);
+    expect($defaults['all'][0]['window'])->toBe('month');
+    expect($defaults['all'][0]['cap'])->toBe(1000);
+    expect($defaults['user'])->toBe([]);
+});
+
+it('replaces the default limit sets that are in the payload', function (): void {
+    [$router, $auth, $csrf] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+
+    $created = usagePut($router, $csrf, '/api/v1/usage/defaults', [
+        'defaults' => [
+            'all' => [
+                ['window' => 'month', 'unit' => 'credits', 'cap' => 1000],
+            ],
+            'group' => [
+                ['window' => 'day', 'unit' => 'llm_calls', 'cap' => 500],
+            ],
+        ],
+    ]);
+
+    expect($created->getStatusCode())->toBe(200);
+
+    $defaults = usageBody($created)['data']['defaults'] ?? [];
+    expect($defaults['all'])->toHaveCount(1);
+    expect($defaults['group'])->toHaveCount(1);
+    expect($defaults['user'])->toBe([]);
+
+    // A scope that is not in the payload is left as it is: a payload that
+    // names one scope must not clear the other two.
+    $replaced = usagePut($router, $csrf, '/api/v1/usage/defaults', [
+        'defaults' => [
+            'user' => [
+                ['window' => 'day', 'unit' => 'credits', 'cap' => 50],
+            ],
+        ],
+    ]);
+
+    expect($replaced->getStatusCode())->toBe(200);
+
+    $defaults = usageBody($replaced)['data']['defaults'] ?? [];
+    expect($defaults['all'])->toHaveCount(1);
+    expect($defaults['group'])->toHaveCount(1);
+    expect($defaults['user'])->toHaveCount(1);
+    expect($defaults['user'][0]['cap'])->toBe(50);
+});
+
+it('refuses a default limit set that is not one', function (): void {
+    [$router, $auth, $csrf] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+
+    $unknownScope = usagePut($router, $csrf, '/api/v1/usage/defaults', [
+        'defaults' => [
+            'nobody' => [],
+        ],
+    ]);
+
+    expect($unknownScope->getStatusCode())->toBe(400);
+
+    $notAList = usagePut($router, $csrf, '/api/v1/usage/defaults', [
+        'defaults' => [
+            'user' => ['window' => 'day'],
+        ],
+    ]);
+
+    expect($notAList->getStatusCode())->toBe(400);
+
+    $notAWindow = usagePut($router, $csrf, '/api/v1/usage/defaults', [
+        'defaults' => [
+            'user' => [['window' => 'fortnight', 'unit' => 'credits', 'cap' => 10]],
+        ],
+    ]);
+
+    expect($notAWindow->getStatusCode())->toBe(422);
+
+    // The refusal names the path it was reading, so the operator knows
+    // which set is wrong.
+    expect(usageBody($notAWindow)['error']['message'] ?? '')
+        ->toContain('defaults.user[0].window');
+});
+
 it('replaces the price book with the given rows', function (): void {
     [$router, $auth, $csrf] = usageApi();
 

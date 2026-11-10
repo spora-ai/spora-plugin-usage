@@ -7,6 +7,7 @@ namespace Spora\Plugins\Usage\Http;
 use JsonException;
 use Spora\Http\JsonControllerHelpers;
 use Spora\Plugins\Usage\Http\Exceptions\UsagePayloadException;
+use Spora\Plugins\Usage\Models\UsageDefaultLimit;
 use Spora\Plugins\Usage\Models\UsageLimit;
 use Spora\Plugins\Usage\Models\UsagePrice;
 use Spora\Plugins\Usage\Services\WindowCalculator;
@@ -65,21 +66,72 @@ final class UsagePayloadParser
             throw new UsagePayloadException('BAD_REQUEST', 'limits must be an array.', Response::HTTP_BAD_REQUEST);
         }
 
+        return $this->parseLimitSet($rows, 'limits');
+    }
+
+    /**
+     * The default limit sets, read and checked.
+     *
+     * A scope that is not in the payload is left as it is: a payload that
+     * names one scope must not clear the other two.
+     *
+     * @return array<string, list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>>
+     */
+    public function parseDefaultLimits(Request $request): array
+    {
+        $defaults = $this->body($request)['defaults'] ?? null;
+        if (!is_array($defaults)) {
+            throw new UsagePayloadException('BAD_REQUEST', 'defaults must be an object.', Response::HTTP_BAD_REQUEST);
+        }
+
+        $sets = [];
+
+        foreach ($defaults as $scope => $rows) {
+            if (!in_array($scope, UsageDefaultLimit::SCOPES, true)) {
+                throw new UsagePayloadException(
+                    'BAD_REQUEST',
+                    "defaults.{$scope} is not a scope. The scopes are: " . implode(', ', UsageDefaultLimit::SCOPES) . '.',
+                    Response::HTTP_BAD_REQUEST,
+                );
+            }
+
+            if (!is_array($rows) || !array_is_list($rows)) {
+                throw new UsagePayloadException(
+                    'BAD_REQUEST',
+                    "defaults.{$scope} must be an array.",
+                    Response::HTTP_BAD_REQUEST,
+                );
+            }
+
+            $sets[$scope] = $this->parseLimitSet($rows, "defaults.{$scope}");
+        }
+
+        return $sets;
+    }
+
+    /**
+     * One set of limit rows, read and checked.
+     *
+     * @param array<mixed> $rows
+     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
+     */
+    private function parseLimitSet(array $rows, string $prefix): array
+    {
         $limits = [];
         $seen = [];
 
         foreach ($rows as $index => $row) {
             if (!is_array($row)) {
-                throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}] must be an object.", Response::HTTP_BAD_REQUEST);
+                throw new UsagePayloadException('BAD_REQUEST', "{$prefix}[{$index}] must be an object.", Response::HTTP_BAD_REQUEST);
             }
 
-            $limit = $this->parseLimit($row, (int) $index);
+            $limit = $this->parseLimit($row, (int) $index, $prefix);
 
             $key = $limit['window'] . '|' . $limit['window_size'] . '|' . $limit['unit'];
             if (isset($seen[$key])) {
                 throw new UsagePayloadException(
                     'CONFLICT',
-                    "limits[{$index}] duplicates an earlier limit.",
+                    "{$prefix}[{$index}] duplicates an earlier limit.",
                     Response::HTTP_CONFLICT,
                 );
             }
@@ -161,14 +213,14 @@ final class UsagePayloadParser
      * @param array<string, mixed> $row
      * @return array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}
      */
-    private function parseLimit(array $row, int $index): array
+    private function parseLimit(array $row, int $index, string $prefix): array
     {
-        $window = $this->parseLimitWindow($row, $index);
-        $unit = $this->parseLimitUnit($row, $index);
-        $mode = $this->parseLimitMode($row, $index);
-        $size = $this->parseWindowSize($row, $index, $window);
-        $cap = $this->parseLimitCap($row, $index, $unit);
-        $enabled = $this->parseLimitEnabled($row, $index);
+        $window = $this->parseLimitWindow($row, $index, $prefix);
+        $unit = $this->parseLimitUnit($row, $index, $prefix);
+        $mode = $this->parseLimitMode($row, $index, $prefix);
+        $size = $this->parseWindowSize($row, $index, $window, $prefix);
+        $cap = $this->parseLimitCap($row, $index, $unit, $prefix);
+        $enabled = $this->parseLimitEnabled($row, $index, $prefix);
 
         return [
             'window' => $window,
@@ -183,16 +235,16 @@ final class UsagePayloadParser
     /**
      * @param array<string, mixed> $row
      */
-    private function parseLimitWindow(array $row, int $index): string
+    private function parseLimitWindow(array $row, int $index, string $prefix): string
     {
         $window = $row['window'] ?? null;
         if (!is_string($window)) {
-            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].window must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "{$prefix}[{$index}].window must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($window, self::LIMIT_WINDOWS, true)) {
             throw new UsagePayloadException(
                 'INVALID_WINDOW',
-                "limits[{$index}].window must be one of: hour, day, week, month, rolling, total.",
+                "{$prefix}[{$index}].window must be one of: hour, day, week, month, rolling, total.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -203,16 +255,16 @@ final class UsagePayloadParser
     /**
      * @param array<string, mixed> $row
      */
-    private function parseLimitUnit(array $row, int $index): string
+    private function parseLimitUnit(array $row, int $index, string $prefix): string
     {
         $unit = $row['unit'] ?? null;
         if (!is_string($unit)) {
-            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].unit must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "{$prefix}[{$index}].unit must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($unit, self::LIMIT_UNITS, true)) {
             throw new UsagePayloadException(
                 'INVALID_UNIT',
-                "limits[{$index}].unit must be one of: " . implode(', ', self::LIMIT_UNITS) . '.',
+                "{$prefix}[{$index}].unit must be one of: " . implode(', ', self::LIMIT_UNITS) . '.',
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -223,16 +275,16 @@ final class UsagePayloadParser
     /**
      * @param array<string, mixed> $row
      */
-    private function parseLimitMode(array $row, int $index): string
+    private function parseLimitMode(array $row, int $index, string $prefix): string
     {
         $mode = $row['mode'] ?? 'hard';
         if (!is_string($mode)) {
-            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].mode must be a string.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "{$prefix}[{$index}].mode must be a string.", Response::HTTP_BAD_REQUEST);
         }
         if (!in_array($mode, self::LIMIT_MODES, true)) {
             throw new UsagePayloadException(
                 'INVALID_MODE',
-                "limits[{$index}].mode must be one of: " . implode(', ', self::LIMIT_MODES) . '.',
+                "{$prefix}[{$index}].mode must be one of: " . implode(', ', self::LIMIT_MODES) . '.',
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -249,7 +301,7 @@ final class UsagePayloadParser
      *
      * @param array<string, mixed> $row
      */
-    private function parseWindowSize(array $row, int $index, string $window): int
+    private function parseWindowSize(array $row, int $index, string $window, string $prefix): int
     {
         $size = $row['window_size'] ?? null;
 
@@ -257,7 +309,7 @@ final class UsagePayloadParser
             if ($window === WindowCalculator::WINDOW_ROLLING) {
                 throw new UsagePayloadException(
                     'INVALID_WINDOW_SIZE',
-                    "limits[{$index}].window_size is required for the rolling window.",
+                    "{$prefix}[{$index}].window_size is required for the rolling window.",
                     Response::HTTP_UNPROCESSABLE_ENTITY,
                 );
             }
@@ -268,7 +320,7 @@ final class UsagePayloadParser
         if (!is_int($size)) {
             throw new UsagePayloadException(
                 'BAD_REQUEST',
-                "limits[{$index}].window_size must be an integer.",
+                "{$prefix}[{$index}].window_size must be an integer.",
                 Response::HTTP_BAD_REQUEST,
             );
         }
@@ -276,7 +328,7 @@ final class UsagePayloadParser
         if ($size < 1) {
             throw new UsagePayloadException(
                 'INVALID_WINDOW_SIZE',
-                "limits[{$index}].window_size must be at least 1.",
+                "{$prefix}[{$index}].window_size must be at least 1.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -284,7 +336,7 @@ final class UsagePayloadParser
         if ($window !== WindowCalculator::WINDOW_ROLLING && $size !== 1) {
             throw new UsagePayloadException(
                 'INVALID_WINDOW_SIZE',
-                "limits[{$index}].window_size must be 1 for the named windows.",
+                "{$prefix}[{$index}].window_size must be 1 for the named windows.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -297,16 +349,16 @@ final class UsagePayloadParser
      *
      * @param array<string, mixed> $row
      */
-    private function parseLimitCap(array $row, int $index, string $unit): float|int
+    private function parseLimitCap(array $row, int $index, string $unit, string $prefix): float|int
     {
         $cap = $row['cap'] ?? null;
         if (!is_int($cap) && !is_float($cap)) {
-            throw new UsagePayloadException('BAD_REQUEST', "limits[{$index}].cap must be a number.", Response::HTTP_BAD_REQUEST);
+            throw new UsagePayloadException('BAD_REQUEST', "{$prefix}[{$index}].cap must be a number.", Response::HTTP_BAD_REQUEST);
         }
         if ((float) $cap < 0.0) {
             throw new UsagePayloadException(
                 'INVALID_CAP',
-                "limits[{$index}].cap must not be negative.",
+                "{$prefix}[{$index}].cap must not be negative.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -318,7 +370,7 @@ final class UsagePayloadParser
         if (floor((float) $cap) !== (float) $cap) {
             throw new UsagePayloadException(
                 'INVALID_CAP',
-                "limits[{$index}].cap must be a whole number for the {$unit} unit.",
+                "{$prefix}[{$index}].cap must be a whole number for the {$unit} unit.",
                 Response::HTTP_UNPROCESSABLE_ENTITY,
             );
         }
@@ -329,13 +381,13 @@ final class UsagePayloadParser
     /**
      * @param array<string, mixed> $row
      */
-    private function parseLimitEnabled(array $row, int $index): bool
+    private function parseLimitEnabled(array $row, int $index, string $prefix): bool
     {
         $enabled = $row['enabled'] ?? true;
         if (!is_bool($enabled)) {
             throw new UsagePayloadException(
                 'BAD_REQUEST',
-                "limits[{$index}].enabled must be a boolean.",
+                "{$prefix}[{$index}].enabled must be a boolean.",
                 Response::HTTP_BAD_REQUEST,
             );
         }

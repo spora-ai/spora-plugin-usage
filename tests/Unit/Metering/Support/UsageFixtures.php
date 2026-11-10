@@ -101,6 +101,28 @@ final class UsageFixtures
     }
 
     /**
+     * A default limit set for one scope.
+     */
+    public static function seedDefaultLimit(
+        string $scope,
+        string $window,
+        int $windowSize,
+        string $unit,
+        float|int $cap,
+        bool $enabled = true,
+    ): int {
+        return (int) Capsule::table('usage_default_limits')->insertGetId([
+            'scope'       => $scope,
+            'window'      => $window,
+            'window_size' => $windowSize,
+            'unit'        => $unit,
+            'cap'         => $cap,
+            'mode'        => 'hard',
+            'enabled'     => $enabled,
+        ]);
+    }
+
+    /**
      * The start of the slot a moment falls into.
      */
     public static function bucketStart(DateTimeImmutable $at): DateTimeImmutable

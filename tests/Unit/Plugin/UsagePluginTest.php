@@ -55,7 +55,7 @@ it('declares its migrations and its schema version', function (): void {
     $plugin = new UsagePlugin();
 
     expect(realpath($plugin->migrationsPath()))->toBe(realpath(BASE_PATH . '/database/migrations'));
-    expect($plugin->schemaVersion())->toBe(2);
+    expect($plugin->schemaVersion())->toBe(3);
 });
 
 it('contributes the usage app and the settings provider', function (): void {
@@ -125,6 +125,8 @@ it('registers the usage routes with the right method, path and middleware', func
         'PUT /api/v1/usage/principals/{id}/credits',
         'GET /api/v1/usage/prices',
         'PUT /api/v1/usage/prices',
+        'GET /api/v1/usage/defaults',
+        'PUT /api/v1/usage/defaults',
         'GET /api/v1/usage/unpriced',
     ]);
 
@@ -135,6 +137,8 @@ it('registers the usage routes with the right method, path and middleware', func
         'PUT /api/v1/usage/principals/{id}/credits',
         'GET /api/v1/usage/prices',
         'PUT /api/v1/usage/prices',
+        'GET /api/v1/usage/defaults',
+        'PUT /api/v1/usage/defaults',
         'GET /api/v1/usage/unpriced',
     ];
 

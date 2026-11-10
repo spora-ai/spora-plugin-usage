@@ -9,6 +9,8 @@ use Illuminate\Database\Capsule\Manager as Capsule;
 use Psr\Log\LoggerInterface;
 use Spora\Metering\MeteringContext;
 use Spora\Metering\UsageDecision;
+use Spora\Models\Principal;
+use Spora\Plugins\Usage\Models\UsageDefaultLimit;
 use stdClass;
 use Throwable;
 
@@ -30,6 +32,9 @@ final class UsageLimitService
         'llm_calls'     => 'llm_calls',
         'tool_calls'    => 'tool_calls',
     ];
+
+    /** @var array<int, string> */
+    private array $principalTypes = [];
 
     public function __construct(
         private readonly WindowCalculator $windows,
@@ -67,17 +72,94 @@ final class UsageLimitService
     private function enabledLimits(OwnerScope $owner, MeteringContext $context): array
     {
         try {
-            return Capsule::table('usage_limits')
+            $rows = Capsule::table('usage_limits')
                 ->where('owner_type', $owner->type)
                 ->where('owner_id', $owner->id)
-                ->where('enabled', true)
                 ->get()
                 ->all();
+
+            // A row of the owner's own — even a disabled one — is a
+            // configuration, so the default does not stand in for it. An
+            // owner with no row at all is an owner nobody configured, and
+            // that is exactly the case the default exists for.
+            if ($rows !== []) {
+                return array_values(array_filter(
+                    $rows,
+                    static fn(stdClass $row): bool => (bool) $row->enabled,
+                ));
+            }
+
+            return $this->defaultLimits($owner);
         } catch (Throwable $e) {
             $this->logFailure('limits', $owner, $context, $e);
 
             return [];
         }
+    }
+
+    /**
+     * The default limits that stand in for an owner that has none.
+     *
+     * The type's set replaces the general one: a principal of type T uses
+     * T's default when there is one, and the general default otherwise.
+     * An individual is a user, and a user is a principal of type 'user'.
+     *
+     * @return array<int, stdClass>
+     */
+    private function defaultLimits(OwnerScope $owner): array
+    {
+        $scope = $this->defaultScopeFor($owner);
+
+        $rows = $this->enabledDefaultLimits($scope);
+
+        if ($rows === [] && $scope !== UsageDefaultLimit::SCOPE_ALL) {
+            $rows = $this->enabledDefaultLimits(UsageDefaultLimit::SCOPE_ALL);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return array<int, stdClass>
+     */
+    private function enabledDefaultLimits(string $scope): array
+    {
+        return Capsule::table('usage_default_limits')
+            ->where('scope', $scope)
+            ->where('enabled', true)
+            ->get()
+            ->all();
+    }
+
+    /**
+     * The scope of the default that stands in for this owner.
+     */
+    private function defaultScopeFor(OwnerScope $owner): string
+    {
+        if ($owner->isUser()) {
+            return UsageDefaultLimit::SCOPE_USER;
+        }
+
+        return $this->principalType($owner->id) === Principal::TYPE_GROUP
+            ? UsageDefaultLimit::SCOPE_GROUP
+            : UsageDefaultLimit::SCOPE_USER;
+    }
+
+    /**
+     * The type of a principal: a user or a group.
+     *
+     * A principal's type never changes, and one lookup per metered event
+     * would be one query per provider call, so it is cached.
+     */
+    private function principalType(int $principalId): string
+    {
+        if (!isset($this->principalTypes[$principalId])) {
+            $principal = Principal::query()->where('id', $principalId)->first();
+
+            $this->principalTypes[$principalId] = $principal->type ?? Principal::TYPE_USER;
+        }
+
+        return $this->principalTypes[$principalId];
     }
 
     private function decisionFor(OwnerScope $owner, stdClass $limit, MeteringContext $context): ?UsageDecision

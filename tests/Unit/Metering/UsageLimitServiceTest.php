@@ -143,3 +143,132 @@ it('compares the spend and the cap rounded to eight decimals', function (): void
     expect($decision)->not->toBeNull()
         ->and($decision?->scope)->toBe('day:credits');
 });
+
+it('holds a principal that has no limits of its own to the default', function (): void {
+    $userId = UsageFixtures::createUser();
+    $principalId = createUserPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+    UsageFixtures::seedDefaultLimit('user', 'day', 1, 'credits', 100);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->not->toBeNull()
+        ->and($decision?->isHard())->toBeTrue()
+        ->and($decision?->scope)->toBe('day:credits');
+});
+
+it('leaves a principal that has limits of its own to them', function (): void {
+    $userId = UsageFixtures::createUser();
+    $principalId = createUserPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+
+    // The principal's own limit is generous; the default is not. The
+    // principal's row is a configuration, so the default does not stand
+    // in for it.
+    UsageFixtures::seedLimit('principal', $principalId, 'day', 1, 'credits', 1000);
+    UsageFixtures::seedDefaultLimit('user', 'day', 1, 'credits', 100);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->toBeNull();
+});
+
+it('holds a group to the default for groups', function (): void {
+    $userId = UsageFixtures::createUser();
+    $principalId = createGroupPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+    UsageFixtures::seedDefaultLimit('group', 'day', 1, 'credits', 100);
+    UsageFixtures::seedDefaultLimit('user', 'day', 1, 'credits', 1000);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->not->toBeNull()
+        ->and($decision?->reason)->toContain('100');
+});
+
+it('falls back to the general default when the type has none', function (): void {
+    $userId = UsageFixtures::createUser();
+    $principalId = createGroupPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+    UsageFixtures::seedDefaultLimit('all', 'day', 1, 'credits', 100);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->not->toBeNull()
+        ->and($decision?->reason)->toContain('100');
+});
+
+it('holds an individual to the default for users', function (): void {
+    $userId = UsageFixtures::createUser();
+    UsageFixtures::seedBucket(
+        'user',
+        $userId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+    UsageFixtures::seedDefaultLimit('user', 'day', 1, 'credits', 100);
+    UsageFixtures::seedDefaultLimit('group', 'day', 1, 'credits', 1000);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::user($userId), UsageFixtures::context(1, triggerUserId: $userId));
+
+    expect($decision)->not->toBeNull()
+        ->and($decision?->reason)->toContain('100');
+});
+
+it('holds nobody when there is no default at all', function (): void {
+    $userId = UsageFixtures::createUser();
+    $principalId = createUserPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100_000],
+    );
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->toBeNull();
+});
+
+it('ignores a default that is switched off', function (): void {
+    $userId = UsageFixtures::createUser();
+    $principalId = createUserPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+    UsageFixtures::seedDefaultLimit('user', 'day', 1, 'credits', 100, enabled: false);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->toBeNull();
+});
