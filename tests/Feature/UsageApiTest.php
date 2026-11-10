@@ -397,6 +397,53 @@ it('shows the caller the limits that govern them, and where they came from', fun
     expect($principal['limits'][0]['source'])->toBe('default');
 });
 
+it('reports the general default when the type default has nothing switched on', function (): void {
+    // The gate falls back to the general default when the type's set has
+    // nothing switched on, so the summary has to name the same set: the
+    // two answers must not differ.
+    [$router, $auth] = usageApi();
+
+    $adminId = bootAuth($auth, 'admin@example.com');
+    $auth->grantRole($adminId, Role::ADMIN);
+
+    $groupPrincipalId = createGroupPrincipal($adminId);
+
+    Capsule::table('usage_default_limits')->insert([
+        'scope'       => 'group',
+        'window'      => 'day',
+        'window_size' => 1,
+        'unit'        => 'credits',
+        'cap'         => 1,
+        'mode'        => 'hard',
+        'enabled'     => false,
+    ]);
+
+    Capsule::table('usage_default_limits')->insert([
+        'scope'       => 'all',
+        'window'      => 'month',
+        'window_size' => 1,
+        'unit'        => 'credits',
+        'cap'         => 1000,
+        'mode'        => 'hard',
+        'enabled'     => true,
+    ]);
+
+    $response = usageGet($router, '/api/v1/usage/principals');
+
+    $principals = usageBody($response)['data']['principals'] ?? [];
+    $group = null;
+    foreach ($principals as $principal) {
+        if ($principal['id'] === $groupPrincipalId) {
+            $group = $principal;
+        }
+    }
+
+    expect($group)->not->toBeNull();
+    expect($group['limits'])->toHaveCount(1);
+    expect($group['limits'][0]['cap'])->toBe(1000);
+    expect($group['limits'][0]['source'])->toBe('default');
+});
+
 it('shows the caller their own limits when they have them', function (): void {
     [$router, $auth] = usageApi();
 

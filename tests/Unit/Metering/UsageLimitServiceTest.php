@@ -272,3 +272,26 @@ it('ignores a default that is switched off', function (): void {
 
     expect($decision)->toBeNull();
 });
+
+it('reports the general default when the type default has nothing switched on', function (): void {
+    // The set that governs is the one with something switched on: a set
+    // with nothing switched on is no set, and the general default stands
+    // in for it. The gate decides this, so the summary must decide it
+    // the same way.
+    $userId = UsageFixtures::createUser();
+    $principalId = createGroupPrincipal($userId);
+    UsageFixtures::seedBucket(
+        'principal',
+        $principalId,
+        UsageFixtures::bucketStart(new DateTimeImmutable()),
+        ['credits' => 100],
+    );
+    UsageFixtures::seedDefaultLimit('group', 'day', 1, 'credits', 1, enabled: false);
+    UsageFixtures::seedDefaultLimit('all', 'day', 1, 'credits', 100);
+
+    $decision = (new UsageLimitService(new WindowCalculator()))
+        ->evaluate(OwnerScope::principal($principalId), UsageFixtures::context($principalId));
+
+    expect($decision)->not->toBeNull()
+        ->and($decision?->reason)->toContain('100');
+});

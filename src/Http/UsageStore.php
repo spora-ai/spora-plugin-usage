@@ -255,17 +255,36 @@ final class UsageStore
         }
 
         $scope = $this->defaultScopeFor($principalId);
-        $defaults = $this->defaultLimitsOf($scope);
+        $defaults = $this->enabledDefaultLimitsOf($scope);
 
         if ($defaults === [] && $scope !== UsageDefaultLimit::SCOPE_ALL) {
             $scope = UsageDefaultLimit::SCOPE_ALL;
-            $defaults = $this->defaultLimitsOf($scope);
+            $defaults = $this->enabledDefaultLimitsOf($scope);
         }
 
         return array_map(
             static fn(array $limit): array => $limit + ['source' => 'default'],
             $defaults,
         );
+    }
+
+    /**
+     * The default limit set of one scope, with the rows that are switched
+     * on.
+     *
+     * The set that governs is the one with something switched on: a set
+     * with nothing switched on is no set, and the general default stands
+     * in for it. The gate decides the same way, so the summary and the
+     * gate never name different sets.
+     *
+     * @return list<array{window: string, window_size: int, unit: string, cap: float|int, mode: string, enabled: bool}>
+     */
+    private function enabledDefaultLimitsOf(string $scope): array
+    {
+        return array_values(array_filter(
+            $this->defaultLimitsOf($scope),
+            static fn(array $limit): bool => $limit['enabled'],
+        ));
     }
 
     /**
