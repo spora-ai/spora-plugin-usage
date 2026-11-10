@@ -66,9 +66,11 @@ Three sets, and each one is optional:
 
 The cap is measured against the owner's **own** spend, as every limit is: a default of 1 000 credits a month holds each principal to 1 000 credits of their own.
 
+**A summary reports the limits that govern a principal**, and every limit row says where it came from: `source` is `principal` for a row of their own and `default` for the operator's default that stands in for them. The overview of a principal nobody configured therefore does not claim it has no limits — it says which default holds it.
+
 ## Not in this release
 
-**The individual scope is charged but not yet configurable through the API.** An interactive run is charged to the triggering individual as well as to the owner, and the ledger records both. The admin API covers the **principal** scope only: there is no route that lists, limits or grants against a *user* scope, so a per-user allowance can only be created by writing the `usage_limits` / `usage_credits` rows directly.
+**The individual scope is charged but cannot be configured directly.** An interactive run is charged to the triggering individual as well as to the owner, and the ledger records both. The admin API covers the **principal** scope only: there is no route that lists, limits or grants against a *user* scope, so a per-user allowance can only be created by writing the `usage_limits` / `usage_credits` rows directly. The **default for users** does reach it, because an individual is a user and a user is a principal of type `user` — so the default is the one cap an individual scope can have.
 
 The scope is inert until it is configured — a scope with no limit row and no credit pool never blocks a run — so nothing is stopped invisibly. It is the *configuration* that is missing, not the enforcement.
 
