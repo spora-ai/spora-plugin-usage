@@ -14,6 +14,15 @@ if (!defined('Larastan\Larastan\LARAVEL_VERSION')) {
     define('Larastan\Larastan\LARAVEL_VERSION', '13.0.0');
 }
 
+// Larastan reads the framework version from the global constant. PHP
+// resolves an unqualified constant through the enclosing namespaces, but
+// PHPStan's resolver only tries the current namespace and the global one —
+// so the namespaced definition above leaves it undefined and the analysis
+// dies on an internal error.
+if (!defined('LARAVEL_VERSION')) {
+    define('LARAVEL_VERSION', '13.0.0');
+}
+
 // Laravel-style helpers that Eloquent / Larastan expect during analysis.
 if (!function_exists('config_path')) {
     function config_path(string $path = ''): string { // NOSONAR (php:S100) — Laravel convention: snake_case path helper

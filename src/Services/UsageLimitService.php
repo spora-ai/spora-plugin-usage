@@ -1,0 +1,312 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Spora\Plugins\Usage\Services;
+
+use DateTimeImmutable;
+use Illuminate\Database\Capsule\Manager as Capsule;
+use Psr\Log\LoggerInterface;
+use Spora\Metering\MeteringContext;
+use Spora\Metering\UsageDecision;
+use Spora\Models\Principal;
+use Spora\Plugins\Usage\Models\UsageDefaultLimit;
+use stdClass;
+use Throwable;
+
+/**
+ * Answers "has this owner spent too much?" for one owner scope.
+ */
+final class UsageLimitService
+{
+    /**
+     * The bucket counter every unit is measured by.
+     *
+     * The unit comes out of the database, so it is mapped through a
+     * whitelist instead of being interpolated into the query.
+     */
+    private const COUNTERS = [
+        'credits'       => 'credits',
+        'total_tokens'  => 'total_tokens',
+        'output_tokens' => 'output_tokens',
+        'llm_calls'     => 'llm_calls',
+        'tool_calls'    => 'tool_calls',
+    ];
+
+    /** @var array<int, string> */
+    private array $principalTypes = [];
+
+    public function __construct(
+        private readonly WindowCalculator $windows,
+        private readonly ?LoggerInterface $logger = null,
+    ) {}
+
+    /**
+     * The strictest breach among the owner's enabled limits.
+     *
+     * A hard breach beats a soft one and, among equals, the first one found
+     * wins. Null when no limit is breached.
+     */
+    public function evaluate(OwnerScope $owner, MeteringContext $context): ?UsageDecision
+    {
+        $worst = null;
+
+        foreach ($this->enabledLimits($owner, $context) as $limit) {
+            $decision = $this->decisionFor($owner, $limit, $context);
+
+            if ($decision === null) {
+                continue;
+            }
+
+            if ($worst === null || ($decision->isHard() && !$worst->isHard())) {
+                $worst = $decision;
+            }
+        }
+
+        return $worst;
+    }
+
+    /**
+     * @return array<int, stdClass>
+     */
+    private function enabledLimits(OwnerScope $owner, MeteringContext $context): array
+    {
+        try {
+            $rows = Capsule::table('usage_limits')
+                ->where('owner_type', $owner->type)
+                ->where('owner_id', $owner->id)
+                ->get()
+                ->all();
+
+            // A row of the owner's own — even a disabled one — is a
+            // configuration, so the default does not stand in for it. An
+            // owner with no row at all is an owner nobody configured, and
+            // that is exactly the case the default exists for.
+            if ($rows !== []) {
+                return array_values(array_filter(
+                    $rows,
+                    static fn(stdClass $row): bool => (bool) $row->enabled,
+                ));
+            }
+
+            return $this->defaultLimits($owner);
+        } catch (Throwable $e) {
+            $this->logFailure('limits', $owner, $context, $e);
+
+            return [];
+        }
+    }
+
+    /**
+     * The default limits that stand in for an owner that has none.
+     *
+     * The type's set replaces the general one: a principal of type T uses
+     * T's default when there is one, and the general default otherwise.
+     * An individual is a user, and a user is a principal of type 'user'.
+     *
+     * @return array<int, stdClass>
+     */
+    private function defaultLimits(OwnerScope $owner): array
+    {
+        $scope = $this->defaultScopeFor($owner);
+
+        $rows = $this->enabledDefaultLimits($scope);
+
+        if ($rows === [] && $scope !== UsageDefaultLimit::SCOPE_ALL) {
+            $rows = $this->enabledDefaultLimits(UsageDefaultLimit::SCOPE_ALL);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @return array<int, stdClass>
+     */
+    private function enabledDefaultLimits(string $scope): array
+    {
+        return Capsule::table('usage_default_limits')
+            ->where('scope', $scope)
+            ->where('enabled', true)
+            ->get()
+            ->all();
+    }
+
+    /**
+     * The scope of the default that stands in for this owner.
+     */
+    private function defaultScopeFor(OwnerScope $owner): string
+    {
+        if ($owner->isUser()) {
+            return UsageDefaultLimit::SCOPE_USER;
+        }
+
+        return $this->principalType($owner->id) === Principal::TYPE_GROUP
+            ? UsageDefaultLimit::SCOPE_GROUP
+            : UsageDefaultLimit::SCOPE_USER;
+    }
+
+    /**
+     * The type of a principal: a user or a group.
+     *
+     * A principal's type never changes, and one lookup per metered event
+     * would be one query per provider call, so it is cached.
+     */
+    private function principalType(int $principalId): string
+    {
+        if (!isset($this->principalTypes[$principalId])) {
+            $principal = Principal::query()->where('id', $principalId)->first();
+
+            $this->principalTypes[$principalId] = $principal->type ?? Principal::TYPE_USER;
+        }
+
+        return $this->principalTypes[$principalId];
+    }
+
+    private function decisionFor(OwnerScope $owner, stdClass $limit, MeteringContext $context): ?UsageDecision
+    {
+        $unit = $this->asString($limit->unit ?? null);
+        $counter = self::COUNTERS[$unit] ?? null;
+
+        if ($counter === null) {
+            $this->logger?->warning('Usage limit carries an unknown unit — it cannot be evaluated', [
+                'owner_type' => $owner->type,
+                'owner_id'   => $owner->id,
+                'unit'       => $unit,
+            ]);
+
+            return null;
+        }
+
+        $window = $this->asString($limit->window ?? null);
+        $windowSize = (int) ($limit->window_size ?? 1);
+        $cap = $this->asFloat($limit->cap ?? null);
+        $spend = $this->spendFor($owner, $window, $windowSize, $counter, $context);
+
+        // A spend that could not be read and a spend under the cap are the
+        // same answer: this limit is not breached.
+        if ($spend === null || round($spend, 8) < round($cap, 8)) {
+            return null;
+        }
+
+        $mode = $this->asString($limit->mode ?? null) === UsageDecision::MODE_SOFT
+            ? UsageDecision::MODE_SOFT
+            : UsageDecision::MODE_HARD;
+
+        return new UsageDecision(
+            reason: $this->reason($window, $windowSize, $unit, $cap, $spend),
+            mode: $mode,
+            scope: $window . ':' . $unit,
+        );
+    }
+
+    /**
+     * The spend of one unit in one window, or null when it could not be read.
+     */
+    private function spendFor(
+        OwnerScope $owner,
+        string $window,
+        int $windowSize,
+        string $counter,
+        MeteringContext $context,
+    ): ?float {
+        try {
+            $range = $this->windows->rangeFor($window, $windowSize, new DateTimeImmutable());
+
+            $query = Capsule::table('usage_buckets')
+                ->where('owner_type', $owner->type)
+                ->where('owner_id', $owner->id);
+
+            // The window that has no lower bound covers everything ever recorded.
+            if ($range->from !== null) {
+                $query->where('bucket_start', '>=', $range->from);
+            }
+
+            $sum = $query
+                ->where('bucket_start', '<=', $range->to)
+                ->sum($counter);
+
+            return $this->asFloat($sum);
+        } catch (Throwable $e) {
+            $this->logFailure('spend', $owner, $context, $e);
+
+            return null;
+        }
+    }
+
+    private function reason(string $window, int $windowSize, string $unit, float $cap, float $spend): string
+    {
+        return sprintf(
+            'Usage limit reached: the %s window spent %s %s against a cap of %s.',
+            $this->windowLabel($window, $windowSize),
+            $this->amount($spend),
+            $this->unitLabel($unit),
+            $this->amount($cap),
+        );
+    }
+
+    private function windowLabel(string $window, int $windowSize): string
+    {
+        return match ($window) {
+            'hour'    => 'hourly',
+            'day'     => 'daily',
+            'week'    => 'weekly',
+            'month'   => 'monthly',
+            'rolling' => sprintf('rolling %d-hour', $windowSize),
+            'total'   => 'all-time',
+            default   => $window,
+        };
+    }
+
+    private function unitLabel(string $unit): string
+    {
+        return match ($unit) {
+            'credits'       => 'credits',
+            'total_tokens'  => 'total tokens',
+            'output_tokens' => 'output tokens',
+            'llm_calls'     => 'LLM calls',
+            'tool_calls'    => 'tool calls',
+            default         => $unit,
+        };
+    }
+
+    /**
+     * A credit amount without the trailing zeroes a decimal column carries.
+     */
+    private function amount(float $value): string
+    {
+        $rounded = round($value, 8);
+
+        if ($rounded === floor($rounded)) {
+            return number_format($rounded, 0, '.', '');
+        }
+
+        return rtrim(rtrim(number_format($rounded, 8, '.', ''), '0'), '.');
+    }
+
+    private function asString(mixed $value): string
+    {
+        return is_scalar($value) ? (string) $value : '';
+    }
+
+    private function asFloat(mixed $value): float
+    {
+        return is_numeric($value) ? (float) $value : 0.0;
+    }
+
+    private function logFailure(
+        string $operation,
+        OwnerScope $owner,
+        MeteringContext $context,
+        Throwable $e,
+    ): void {
+        $this->logger?->error('Usage limit evaluation failed — the call proceeds', [
+            'operation'    => $operation,
+            'owner_type'   => $owner->type,
+            'owner_id'     => $owner->id,
+            'task_id'      => $context->taskId,
+            'principal_id' => $context->principalId,
+            'exception'    => $e::class,
+            'message'      => $e->getMessage(),
+        ]);
+    }
+}
